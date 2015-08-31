@@ -19,8 +19,6 @@
 
 package org.elasticsearch.search.suggest.completion;
 
-import com.google.common.collect.Lists;
-
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.codecs.FieldsConsumer;
@@ -59,7 +57,7 @@ import org.elasticsearch.index.mapper.core.CompletionFieldMapper;
 import org.elasticsearch.search.suggest.SuggestUtils;
 import org.elasticsearch.search.suggest.completion.Completion090PostingsFormat.LookupFactory;
 import org.elasticsearch.search.suggest.context.ContextMapping;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -73,7 +71,7 @@ import java.util.Set;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 
-public class CompletionPostingsFormatTest extends ElasticsearchTestCase {
+public class CompletionPostingsFormatTest extends ESTestCase {
 
     Settings indexSettings = Settings.builder().put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT.id).build();
     static final CompletionFieldMapper.CompletionFieldType FIELD_TYPE = CompletionFieldMapper.Defaults.FIELD_TYPE.clone();
@@ -89,7 +87,7 @@ public class CompletionPostingsFormatTest extends ElasticsearchTestCase {
     public void testCompletionPostingsFormat() throws IOException {
         AnalyzingCompletionLookupProviderV1 providerV1 = new AnalyzingCompletionLookupProviderV1(true, false, true, true);
         AnalyzingCompletionLookupProvider currentProvider = new AnalyzingCompletionLookupProvider(true, false, true, true);
-        List<Completion090PostingsFormat.CompletionLookupProvider> providers = Lists.newArrayList(providerV1, currentProvider);
+        List<Completion090PostingsFormat.CompletionLookupProvider> providers = Arrays.asList(providerV1, currentProvider);
 
         Completion090PostingsFormat.CompletionLookupProvider randomProvider = providers.get(getRandom().nextInt(providers.size()));
         RAMDirectory dir = new RAMDirectory();

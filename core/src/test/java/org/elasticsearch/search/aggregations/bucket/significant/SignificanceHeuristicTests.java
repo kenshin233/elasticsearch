@@ -42,7 +42,7 @@ import org.elasticsearch.search.aggregations.bucket.significant.heuristics.Signi
 import org.elasticsearch.search.aggregations.bucket.significant.heuristics.SignificanceHeuristicStreams;
 import org.elasticsearch.search.aggregations.pipeline.PipelineAggregator;
 import org.elasticsearch.search.internal.SearchContext;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.TestSearchContext;
 import org.junit.Test;
 
@@ -65,7 +65,7 @@ import static org.hamcrest.Matchers.lessThanOrEqualTo;
 /**
  *
  */
-public class SignificanceHeuristicTests extends ElasticsearchTestCase {
+public class SignificanceHeuristicTests extends ESTestCase {
     static class SignificantTermsTestSearchContext extends TestSearchContext {
         @Override
         public int numberOfShards() {
@@ -81,12 +81,6 @@ public class SignificanceHeuristicTests extends ElasticsearchTestCase {
     // test that stream output can actually be read - does not replace bwc test
     @Test
     public void streamResponse() throws Exception {
-        SignificanceHeuristicStreams.registerStream(MutualInformation.STREAM, MutualInformation.STREAM.getName());
-        SignificanceHeuristicStreams.registerStream(JLHScore.STREAM, JLHScore.STREAM.getName());
-        SignificanceHeuristicStreams.registerStream(PercentageScore.STREAM, PercentageScore.STREAM.getName());
-        SignificanceHeuristicStreams.registerStream(GND.STREAM, GND.STREAM.getName());
-        SignificanceHeuristicStreams.registerStream(ChiSquare.STREAM, ChiSquare.STREAM.getName());
-        SignificanceHeuristicStreams.registerStream(ScriptHeuristic.STREAM, ScriptHeuristic.STREAM.getName());
         Version version = randomVersion(random());
         InternalSignificantTerms[] sigTerms = getRandomSignificantTerms(getRandomSignificanceheuristic());
 
@@ -143,11 +137,7 @@ public class SignificanceHeuristicTests extends ElasticsearchTestCase {
     public void testBuilderAndParser() throws Exception {
 
         Set<SignificanceHeuristicParser> parsers = new HashSet<>();
-        parsers.add(new JLHScore.JLHScoreParser());
-        parsers.add(new MutualInformation.MutualInformationParser());
-        parsers.add(new GND.GNDParser());
-        parsers.add(new ChiSquare.ChiSquareParser());
-        SignificanceHeuristicParserMapper heuristicParserMapper = new SignificanceHeuristicParserMapper(parsers);
+        SignificanceHeuristicParserMapper heuristicParserMapper = new SignificanceHeuristicParserMapper(parsers, null);
         SearchContext searchContext = new SignificantTermsTestSearchContext();
 
         // test jlh with string

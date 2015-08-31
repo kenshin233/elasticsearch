@@ -19,7 +19,6 @@
 
 package org.elasticsearch.cluster;
 
-import com.google.common.collect.ImmutableMap;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.LatchedActionListener;
 import org.elasticsearch.action.admin.cluster.node.stats.NodeStats;
@@ -32,10 +31,10 @@ import org.elasticsearch.action.admin.indices.stats.ShardStats;
 import org.elasticsearch.action.admin.indices.stats.TransportIndicesStatsAction;
 import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.node.DiscoveryNode;
-import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.cluster.routing.allocation.decider.DiskThresholdDecider;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
@@ -66,8 +65,9 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
 
     private volatile TimeValue updateFrequency;
 
-    private volatile ImmutableMap<String, DiskUsage> usages;
-    private volatile ImmutableMap<String, Long> shardSizes;
+    private volatile Map<String, DiskUsage> leastAvailableSpaceUsages;
+    private volatile Map<String, DiskUsage> mostAvailableSpaceUsages;
+    private volatile Map<String, Long> shardSizes;
     private volatile boolean isMaster = false;
     private volatile boolean enabled;
     private volatile TimeValue fetchTimeout;
@@ -83,8 +83,9 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
                                       TransportIndicesStatsAction transportIndicesStatsAction, ClusterService clusterService,
                                       ThreadPool threadPool) {
         super(settings);
-        this.usages = ImmutableMap.of();
-        this.shardSizes = ImmutableMap.of();
+        this.leastAvailableSpaceUsages = Collections.emptyMap();
+        this.mostAvailableSpaceUsages = Collections.emptyMap();
+        this.shardSizes = Collections.emptyMap();
         this.transportNodesStatsAction = transportNodesStatsAction;
         this.transportIndicesStatsAction = transportIndicesStatsAction;
         this.clusterService = clusterService;
@@ -199,9 +200,16 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
                     if (logger.isTraceEnabled()) {
                         logger.trace("Removing node from cluster info: {}", removedNode.getId());
                     }
-                    Map<String, DiskUsage> newUsages = new HashMap<>(usages);
-                    newUsages.remove(removedNode.getId());
-                    usages = ImmutableMap.copyOf(newUsages);
+                    if (leastAvailableSpaceUsages.containsKey(removedNode.getId())) {
+                        Map<String, DiskUsage> newMaxUsages = new HashMap<>(leastAvailableSpaceUsages);
+                        newMaxUsages.remove(removedNode.getId());
+                        leastAvailableSpaceUsages = Collections.unmodifiableMap(newMaxUsages);
+                    }
+                    if (mostAvailableSpaceUsages.containsKey(removedNode.getId())) {
+                        Map<String, DiskUsage> newMinUsages = new HashMap<>(mostAvailableSpaceUsages);
+                        newMinUsages.remove(removedNode.getId());
+                        mostAvailableSpaceUsages = Collections.unmodifiableMap(newMinUsages);
+                    }
                 }
             }
         }
@@ -209,7 +217,7 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
 
     @Override
     public ClusterInfo getClusterInfo() {
-        return new ClusterInfo(usages, shardSizes);
+        return new ClusterInfo(leastAvailableSpaceUsages, mostAvailableSpaceUsages, shardSizes);
     }
 
     @Override
@@ -312,27 +320,11 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
             CountDownLatch nodeLatch = updateNodeStats(new ActionListener<NodesStatsResponse>() {
                 @Override
                 public void onResponse(NodesStatsResponse nodeStatses) {
-                    Map<String, DiskUsage> newUsages = new HashMap<>();
-                    for (NodeStats nodeStats : nodeStatses.getNodes()) {
-                        if (nodeStats.getFs() == null) {
-                            logger.warn("Unable to retrieve node FS stats for {}", nodeStats.getNode().name());
-                        } else {
-                            long available = 0;
-                            long total = 0;
-
-                            for (FsInfo.Path info : nodeStats.getFs()) {
-                                available += info.getAvailable().bytes();
-                                total += info.getTotal().bytes();
-                            }
-                            String nodeId = nodeStats.getNode().id();
-                            String nodeName = nodeStats.getNode().getName();
-                            if (logger.isTraceEnabled()) {
-                                logger.trace("node: [{}], total disk: {}, available disk: {}", nodeId, total, available);
-                            }
-                            newUsages.put(nodeId, new DiskUsage(nodeId, nodeName, total, available));
-                        }
-                    }
-                    usages = ImmutableMap.copyOf(newUsages);
+                    Map<String, DiskUsage> newLeastAvaiableUsages = new HashMap<>();
+                    Map<String, DiskUsage> newMostAvaiableUsages = new HashMap<>();
+                    fillDiskUsagePerNode(logger, nodeStatses.getNodes(), newLeastAvaiableUsages, newMostAvaiableUsages);
+                    leastAvailableSpaceUsages = Collections.unmodifiableMap(newLeastAvaiableUsages);
+                    mostAvailableSpaceUsages = Collections.unmodifiableMap(newMostAvaiableUsages);
                 }
 
                 @Override
@@ -348,7 +340,8 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
                             logger.warn("Failed to execute NodeStatsAction for ClusterInfoUpdateJob", e);
                         }
                         // we empty the usages list, to be safe - we don't know what's going on.
-                        usages = ImmutableMap.of();
+                        leastAvailableSpaceUsages = Collections.emptyMap();
+                        mostAvailableSpaceUsages = Collections.emptyMap();
                     }
                 }
             });
@@ -366,7 +359,7 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
                         }
                         newShardSizes.put(sid, size);
                     }
-                    shardSizes = ImmutableMap.copyOf(newShardSizes);
+                    shardSizes = Collections.unmodifiableMap(newShardSizes);
                 }
 
                 @Override
@@ -382,7 +375,7 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
                             logger.warn("Failed to execute IndicesStatsAction for ClusterInfoUpdateJob", e);
                         }
                         // we empty the usages list, to be safe - we don't know what's going on.
-                        shardSizes = ImmutableMap.of();
+                        shardSizes = Collections.emptyMap();
                     }
                 }
             });
@@ -407,6 +400,35 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
                 } catch (Exception e) {
                     logger.info("Failed executing ClusterInfoService listener", e);
                 }
+            }
+        }
+    }
+
+    static void fillDiskUsagePerNode(ESLogger logger, NodeStats[] nodeStatsArray, Map<String, DiskUsage> newLeastAvaiableUsages, Map<String, DiskUsage> newMostAvaiableUsages) {
+        for (NodeStats nodeStats : nodeStatsArray) {
+            if (nodeStats.getFs() == null) {
+                logger.warn("Unable to retrieve node FS stats for {}", nodeStats.getNode().name());
+            } else {
+                FsInfo.Path leastAvailablePath = null;
+                FsInfo.Path mostAvailablePath = null;
+                for (FsInfo.Path info : nodeStats.getFs()) {
+                    if (leastAvailablePath == null) {
+                        assert mostAvailablePath == null;
+                        mostAvailablePath = leastAvailablePath = info;
+                    } else if (leastAvailablePath.getAvailable().bytes() > info.getAvailable().bytes()){
+                        leastAvailablePath = info;
+                    } else if (mostAvailablePath.getAvailable().bytes() < info.getAvailable().bytes()) {
+                        mostAvailablePath = info;
+                    }
+                }
+                String nodeId = nodeStats.getNode().id();
+                String nodeName = nodeStats.getNode().getName();
+                if (logger.isTraceEnabled()) {
+                    logger.trace("node: [{}], most available: total disk: {}, available disk: {} / least available: total disk: {}, available disk: {}", nodeId, mostAvailablePath.getTotal(), leastAvailablePath.getAvailable(), leastAvailablePath.getTotal(), leastAvailablePath.getAvailable());
+                }
+                newLeastAvaiableUsages.put(nodeId, new DiskUsage(nodeId, nodeName, leastAvailablePath.getPath(), leastAvailablePath.getTotal().bytes(), leastAvailablePath.getAvailable().bytes()));
+                newMostAvaiableUsages.put(nodeId, new DiskUsage(nodeId, nodeName, mostAvailablePath.getPath(), mostAvailablePath.getTotal().bytes(), mostAvailablePath.getAvailable().bytes()));
+
             }
         }
     }

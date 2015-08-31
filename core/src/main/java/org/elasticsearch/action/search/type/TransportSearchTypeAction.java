@@ -115,7 +115,10 @@ public abstract class TransportSearchTypeAction extends TransportAction<SearchRe
 
             clusterState.blocks().globalBlockedRaiseException(ClusterBlockLevel.READ);
 
-            String[] concreteIndices = indexNameExpressionResolver.concreteIndices(clusterState, request.indicesOptions(), request.indices());
+            // TODO: I think startTime() should become part of ActionRequest and that should be used both for index name
+            // date math expressions and $now in scripts. This way all apis will deal with now in the same way instead
+            // of just for the _search api
+            String[] concreteIndices = indexNameExpressionResolver.concreteIndices(clusterState, request.indicesOptions(), startTime(), request.indices());
 
             for (String index : concreteIndices) {
                 clusterState.blocks().indexBlockedRaiseException(ClusterBlockLevel.READ, index);
@@ -177,7 +180,7 @@ public abstract class TransportSearchTypeAction extends TransportAction<SearchRe
 
         void onFirstPhaseResult(int shardIndex, ShardRouting shard, FirstResult result, ShardIterator shardIt) {
             result.shardTarget(new SearchShardTarget(shard.currentNodeId(), shard.index(), shard.id()));
-            processFirstPhaseResult(shardIndex, shard, result);
+            processFirstPhaseResult(shardIndex, result);
             // we need to increment successful ops first before we compare the exit condition otherwise if we
             // are fast we could concurrently update totalOps but then preempt one of the threads which can
             // cause the successor to read a wrong value from successfulOps if second phase is very fast ie. count etc.
@@ -355,7 +358,7 @@ public abstract class TransportSearchTypeAction extends TransportAction<SearchRe
 
         protected abstract void sendExecuteFirstPhase(DiscoveryNode node, ShardSearchTransportRequest request, ActionListener<FirstResult> listener);
 
-        protected final void processFirstPhaseResult(int shardIndex, ShardRouting shard, FirstResult result) {
+        protected final void processFirstPhaseResult(int shardIndex, FirstResult result) {
             firstResults.set(shardIndex, result);
 
             if (logger.isTraceEnabled()) {

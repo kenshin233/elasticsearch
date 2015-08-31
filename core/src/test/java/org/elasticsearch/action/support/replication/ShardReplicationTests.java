@@ -54,7 +54,7 @@ import org.elasticsearch.index.shard.IndexShardNotStartedException;
 import org.elasticsearch.index.shard.IndexShardState;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.rest.RestStatus;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.cluster.TestClusterService;
 import org.elasticsearch.test.transport.CapturingTransport;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -80,7 +80,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.elasticsearch.cluster.metadata.IndexMetaData.*;
 import static org.hamcrest.Matchers.*;
 
-public class ShardReplicationTests extends ElasticsearchTestCase {
+public class ShardReplicationTests extends ESTestCase {
 
     private static ThreadPool threadPool;
 
@@ -661,7 +661,6 @@ public class ShardReplicationTests extends ElasticsearchTestCase {
         public AtomicInteger processedOnReplicas = new AtomicInteger();
 
         Request() {
-            this.operationThreaded(randomBoolean());
         }
 
         Request(ShardId shardId) {
@@ -694,7 +693,7 @@ public class ShardReplicationTests extends ElasticsearchTestCase {
                ThreadPool threadPool) {
             super(settings, actionName, transportService, clusterService, null, threadPool,
                     new ShardStateAction(settings, clusterService, transportService, null, null), null,
-                    new ActionFilters(new HashSet<ActionFilter>()), new IndexNameExpressionResolver(), Request.class, Request.class, ThreadPool.Names.SAME);
+                    new ActionFilters(new HashSet<ActionFilter>()), new IndexNameExpressionResolver(Settings.EMPTY), Request.class, Request.class, ThreadPool.Names.SAME);
         }
 
         @Override

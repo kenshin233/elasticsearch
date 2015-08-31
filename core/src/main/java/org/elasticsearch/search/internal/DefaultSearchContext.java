@@ -21,13 +21,21 @@ package org.elasticsearch.search.internal;
 
 import com.carrotsearch.hppc.ObjectObjectAssociativeContainer;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
 import org.apache.lucene.search.BooleanClause.Occur;
-import org.apache.lucene.search.*;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.Collector;
+import org.apache.lucene.search.ConstantScoreQuery;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.Sort;
 import org.apache.lucene.util.Counter;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.cache.recycler.PageCacheRecycler;
-import org.elasticsearch.common.*;
+import org.elasticsearch.common.HasContext;
+import org.elasticsearch.common.HasContextAndHeaders;
+import org.elasticsearch.common.HasHeaders;
+import org.elasticsearch.common.Nullable;
+import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.collect.ImmutableOpenMap;
 import org.elasticsearch.common.lease.Releasables;
 import org.elasticsearch.common.lucene.search.Queries;
@@ -48,12 +56,12 @@ import org.elasticsearch.index.query.ParsedQuery;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.similarity.SimilarityService;
 import org.elasticsearch.script.ScriptService;
-import org.elasticsearch.search.Scroll;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.aggregations.SearchContextAggregations;
 import org.elasticsearch.search.dfs.DfsSearchResult;
 import org.elasticsearch.search.fetch.FetchSearchResult;
-import org.elasticsearch.search.fetch.fielddata.FieldDataFieldsContext;
+import org.elasticsearch.search.fetch.FetchSubPhase;
+import org.elasticsearch.search.fetch.FetchSubPhaseContext;
 import org.elasticsearch.search.fetch.innerhits.InnerHitsContext;
 import org.elasticsearch.search.fetch.script.ScriptFieldsContext;
 import org.elasticsearch.search.fetch.source.FetchSourceContext;
@@ -65,7 +73,13 @@ import org.elasticsearch.search.rescore.RescoreSearchContext;
 import org.elasticsearch.search.scan.ScanContext;
 import org.elasticsearch.search.suggest.SuggestionSearchContext;
 
-import java.util.*;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  *
@@ -95,11 +109,10 @@ public class DefaultSearchContext extends SearchContext {
     // terminate after count
     private int terminateAfter = DEFAULT_TERMINATE_AFTER;
     private List<String> groupStats;
-    private Scroll scroll;
+    private ScrollContext scrollContext;
     private boolean explain;
     private boolean version = false; // by default, we don't return versions
     private List<String> fieldNames;
-    private FieldDataFieldsContext fieldDataFields;
     private ScriptFieldsContext scriptFields;
     private FetchSourceContext fetchSourceContext;
     private int from = -1;
@@ -119,18 +132,20 @@ public class DefaultSearchContext extends SearchContext {
     private SuggestionSearchContext suggest;
     private List<RescoreSearchContext> rescore;
     private SearchLookup searchLookup;
-    private boolean queryRewritten;
     private volatile long keepAlive;
     private ScoreDoc lastEmittedDoc;
     private final long originNanoTime = System.nanoTime();
     private volatile long lastAccessTime = -1;
     private InnerHitsContext innerHitsContext;
 
+    private final Map<String, FetchSubPhaseContext> subPhaseContexts = new HashMap<>();
+    private final Map<Class<?>, Collector> queryCollectors = new HashMap<>();
+
     public DefaultSearchContext(long id, ShardSearchRequest request, SearchShardTarget shardTarget,
-                         Engine.Searcher engineSearcher, IndexService indexService, IndexShard indexShard,
-                         ScriptService scriptService, PageCacheRecycler pageCacheRecycler,
-                         BigArrays bigArrays, Counter timeEstimateCounter, ParseFieldMatcher parseFieldMatcher,
-                         TimeValue timeout
+                                Engine.Searcher engineSearcher, IndexService indexService, IndexShard indexShard,
+                                ScriptService scriptService, PageCacheRecycler pageCacheRecycler,
+                                BigArrays bigArrays, Counter timeEstimateCounter, ParseFieldMatcher parseFieldMatcher,
+                                TimeValue timeout
     ) {
         super(parseFieldMatcher);
         this.id = id;
@@ -195,10 +210,15 @@ public class DefaultSearchContext extends SearchContext {
                 parsedQuery(new ParsedQuery(filtered, parsedQuery()));
             }
         }
+        try {
+            this.query = searcher().rewrite(this.query);
+        } catch (IOException e) {
+            throw new QueryPhaseExecutionException(this, "Failed to rewrite main query", e);
+        }
     }
 
     @Override
-    public Filter searchFilter(String[] types) {
+    public Query searchFilter(String[] types) {
         Query filter = mapperService().searchFilter(types);
         if (filter == null && aliasFilter == null) {
             return null;
@@ -210,7 +230,7 @@ public class DefaultSearchContext extends SearchContext {
         if (aliasFilter != null) {
             bq.add(aliasFilter, Occur.MUST);
         }
-        return new QueryWrapperFilter(bq);
+        return new ConstantScoreQuery(bq);
     }
 
     @Override
@@ -281,13 +301,13 @@ public class DefaultSearchContext extends SearchContext {
     }
 
     @Override
-    public Scroll scroll() {
-        return this.scroll;
+    public ScrollContext scrollContext() {
+        return this.scrollContext;
     }
 
     @Override
-    public SearchContext scroll(Scroll scroll) {
-        this.scroll = scroll;
+    public SearchContext scrollContext(ScrollContext scrollContext) {
+        this.scrollContext = scrollContext;
         return this;
     }
 
@@ -301,6 +321,16 @@ public class DefaultSearchContext extends SearchContext {
         this.aggregations = aggregations;
         return this;
     }
+
+    @Override
+    public <SubPhaseContext extends FetchSubPhaseContext> SubPhaseContext getFetchSubPhaseContext(FetchSubPhase.ContextFactory<SubPhaseContext> contextFactory) {
+        String subPhaseName = contextFactory.getName();
+        if (subPhaseContexts.get(subPhaseName) == null) {
+            subPhaseContexts.put(subPhaseName, contextFactory.newContextInstance());
+        }
+        return (SubPhaseContext) subPhaseContexts.get(subPhaseName);
+    }
+
 
     @Override
     public SearchContextHighlight highlight() {
@@ -336,19 +366,6 @@ public class DefaultSearchContext extends SearchContext {
             this.rescore = new ArrayList<>();
         }
         this.rescore.add(rescore);
-    }
-
-    @Override
-    public boolean hasFieldDataFields() {
-        return fieldDataFields != null;
-    }
-
-    @Override
-    public FieldDataFieldsContext fieldDataFields() {
-        if (fieldDataFields == null) {
-            fieldDataFields = new FieldDataFieldsContext();
-        }
-        return this.fieldDataFields;
     }
 
     @Override
@@ -514,7 +531,6 @@ public class DefaultSearchContext extends SearchContext {
 
     @Override
     public SearchContext parsedQuery(ParsedQuery query) {
-        queryRewritten = false;
         this.originalQuery = query;
         this.query = query.query();
         return this;
@@ -526,29 +542,11 @@ public class DefaultSearchContext extends SearchContext {
     }
 
     /**
-     * The query to execute, might be rewritten.
+     * The query to execute, in its rewritten form.
      */
     @Override
     public Query query() {
         return this.query;
-    }
-
-    /**
-     * Has the query been rewritten already?
-     */
-    @Override
-    public boolean queryRewritten() {
-        return queryRewritten;
-    }
-
-    /**
-     * Rewrites the query and updates it. Only happens once.
-     */
-    @Override
-    public SearchContext updateRewriteQuery(Query rewriteQuery) {
-        query = rewriteQuery;
-        queryRewritten = true;
-        return this;
     }
 
     @Override
@@ -581,7 +579,7 @@ public class DefaultSearchContext extends SearchContext {
     @Override
     public List<String> fieldNames() {
         if (fieldNames == null) {
-            fieldNames = Lists.newArrayList();
+            fieldNames = new ArrayList<>();
         }
         return fieldNames;
     }
@@ -663,16 +661,6 @@ public class DefaultSearchContext extends SearchContext {
     @Override
     public void keepAlive(long keepAlive) {
         this.keepAlive = keepAlive;
-    }
-
-    @Override
-    public void lastEmittedDoc(ScoreDoc doc) {
-        this.lastEmittedDoc = doc;
-    }
-
-    @Override
-    public ScoreDoc lastEmittedDoc() {
-        return lastEmittedDoc;
     }
 
     @Override
@@ -810,5 +798,10 @@ public class DefaultSearchContext extends SearchContext {
     @Override
     public void copyContextAndHeadersFrom(HasContextAndHeaders other) {
         request.copyContextAndHeadersFrom(other);
+    }
+
+    @Override
+    public Map<Class<?>, Collector> queryCollectors() {
+        return queryCollectors;
     }
 }

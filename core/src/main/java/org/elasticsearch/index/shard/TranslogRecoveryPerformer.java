@@ -25,7 +25,6 @@ import org.elasticsearch.Version;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.lucene.search.Queries;
@@ -67,7 +66,7 @@ public class TranslogRecoveryPerformer {
         this.indexCache = indexCache;
     }
 
-    protected Tuple<DocumentMapper, Mapping> docMapper(String type) {
+    protected DocumentMapperForType docMapper(String type) {
         return mapperService.documentMapperWithAutoCreate(type); // protected for testing
     }
 
@@ -204,7 +203,7 @@ public class TranslogRecoveryPerformer {
             query = queryParserService.parseQuery(source).query();
         } catch (QueryParsingException ex) {
             // for BWC we try to parse directly the query since pre 1.0.0.Beta2 we didn't require a top level query field
-            if ( queryParserService.getIndexCreatedVersion().onOrBefore(Version.V_1_0_0_Beta2)) {
+            if (queryParserService.getIndexCreatedVersion().onOrBefore(Version.V_1_0_0_Beta2)) {
                 try {
                     XContentParser parser = XContentHelper.createParser(source);
                     ParsedQuery parse = queryParserService.parse(parser);

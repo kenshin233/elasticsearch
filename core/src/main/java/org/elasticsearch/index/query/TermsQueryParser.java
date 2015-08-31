@@ -19,8 +19,6 @@
 
 package org.elasticsearch.index.query;
 
-import com.google.common.collect.Lists;
-
 import org.apache.lucene.index.Term;
 import org.apache.lucene.queries.TermsQuery;
 import org.apache.lucene.search.BooleanClause.Occur;
@@ -42,6 +40,7 @@ import org.elasticsearch.indices.cache.query.terms.TermsLookup;
 import org.elasticsearch.search.internal.SearchContext;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -51,10 +50,9 @@ public class TermsQueryParser implements QueryParser {
 
     public static final String NAME = "terms";
     private static final ParseField MIN_SHOULD_MATCH_FIELD = new ParseField("min_match", "min_should_match").withAllDeprecated("Use [bool] query instead");
+    private static final ParseField DISABLE_COORD_FIELD = new ParseField("disable_coord").withAllDeprecated("Use [bool] query instead");
+    private static final ParseField EXECUTION_FIELD = new ParseField("execution").withAllDeprecated("execution is deprecated and has no effect");
     private Client client;
-
-    @Deprecated
-    public static final String EXECUTION_KEY = "execution";
 
     @Inject
     public TermsQueryParser() {
@@ -84,8 +82,10 @@ public class TermsQueryParser implements QueryParser {
         String lookupRouting = null;
         String minShouldMatch = null;
 
+        boolean disableCoord = false;
+
         XContentParser.Token token;
-        List<Object> terms = Lists.newArrayList();
+        List<Object> terms = new ArrayList<>();
         String fieldName = null;
         float boost = 1f;
         while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
@@ -138,7 +138,7 @@ public class TermsQueryParser implements QueryParser {
                     throw new QueryParsingException(parseContext, "[terms] query lookup element requires specifying the path");
                 }
             } else if (token.isValue()) {
-                if (EXECUTION_KEY.equals(currentFieldName)) {
+                if (parseContext.parseFieldMatcher().match(currentFieldName, EXECUTION_FIELD)) {
                     // ignore
                 } else if (parseContext.parseFieldMatcher().match(currentFieldName, MIN_SHOULD_MATCH_FIELD)) {
                     if (minShouldMatch != null) {
@@ -147,6 +147,8 @@ public class TermsQueryParser implements QueryParser {
                     minShouldMatch = parser.textOrNull();
                 } else if ("boost".equals(currentFieldName)) {
                     boost = parser.floatValue();
+                } else if (parseContext.parseFieldMatcher().match(currentFieldName, DISABLE_COORD_FIELD)) {
+                    disableCoord = parser.booleanValue();
                 } else if ("_name".equals(currentFieldName)) {
                     queryName = parser.text();
                 } else {
@@ -191,7 +193,7 @@ public class TermsQueryParser implements QueryParser {
                 query = new TermsQuery(fieldName, filterValues);
             }
         } else {
-            BooleanQuery bq = new BooleanQuery();
+            BooleanQuery bq = new BooleanQuery(disableCoord);
             for (Object term : terms) {
                 if (fieldType != null) {
                     bq.add(fieldType.termQuery(term, parseContext), Occur.SHOULD);

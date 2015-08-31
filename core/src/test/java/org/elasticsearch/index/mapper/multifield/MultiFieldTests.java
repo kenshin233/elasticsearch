@@ -39,7 +39,7 @@ import org.elasticsearch.index.mapper.core.LongFieldMapper;
 import org.elasticsearch.index.mapper.core.StringFieldMapper;
 import org.elasticsearch.index.mapper.core.TokenCountFieldMapper;
 import org.elasticsearch.index.mapper.geo.GeoPointFieldMapper;
-import org.elasticsearch.test.ElasticsearchSingleNodeTest;
+import org.elasticsearch.test.ESSingleNodeTestCase;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -47,8 +47,8 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.TreeMap;
 
-import static org.elasticsearch.common.io.Streams.copyToBytesFromClasspath;
-import static org.elasticsearch.common.io.Streams.copyToStringFromClasspath;
+import static org.elasticsearch.test.StreamsUtils.copyToBytesFromClasspath;
+import static org.elasticsearch.test.StreamsUtils.copyToStringFromClasspath;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.elasticsearch.index.mapper.MapperBuilders.doc;
 import static org.elasticsearch.index.mapper.MapperBuilders.rootObject;
@@ -60,7 +60,7 @@ import static org.hamcrest.Matchers.notNullValue;
 /**
  *
  */
-public class MultiFieldTests extends ElasticsearchSingleNodeTest {
+public class MultiFieldTests extends ESSingleNodeTestCase {
 
     @Test
     public void testMultiField_multiFieldType() throws Exception {

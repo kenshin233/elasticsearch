@@ -26,24 +26,18 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterators;
-
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.DelegatingAnalyzerWrapper;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.queries.TermsQuery;
-import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.*;
 import org.apache.lucene.search.BooleanClause.Occur;
-import org.apache.lucene.search.BooleanQuery;
-import org.apache.lucene.search.Query;
-import org.apache.lucene.search.ConstantScoreQuery;
-import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.ElasticsearchGenerationException;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.collect.ImmutableOpenMap;
-import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.compress.CompressedXContent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.lucene.search.Queries;
@@ -63,13 +57,9 @@ import org.elasticsearch.indices.TypeMissingException;
 import org.elasticsearch.percolator.PercolatorService;
 import org.elasticsearch.script.ScriptService;
 
+import java.io.Closeable;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -78,7 +68,7 @@ import static org.elasticsearch.common.collect.MapBuilder.newMapBuilder;
 /**
  *
  */
-public class MapperService extends AbstractIndexComponent  {
+public class MapperService extends AbstractIndexComponent implements Closeable {
 
     public static final String DEFAULT_MAPPING = "_default_";
     private static ObjectHashSet<String> META_FIELDS = ObjectHashSet.from(
@@ -260,6 +250,9 @@ public class MapperService extends AbstractIndexComponent  {
             if (mapper.type().length() == 0) {
                 throw new InvalidTypeNameException("mapping type name is empty");
             }
+            if (Version.indexCreated(indexSettings).onOrAfter(Version.V_2_0_0_beta1) && mapper.type().length() > 255) {
+                throw new InvalidTypeNameException("mapping type name [" + mapper.type() + "] is too long; limit is length 255 but was [" + mapper.type().length() + "]");
+            }
             if (mapper.type().charAt(0) == '_') {
                 throw new InvalidTypeNameException("mapping type name [" + mapper.type() + "] can't start with '_'");
             }
@@ -272,8 +265,12 @@ public class MapperService extends AbstractIndexComponent  {
             if (Version.indexCreated(indexSettings).onOrAfter(Version.V_2_0_0_beta1) && mapper.type().equals(mapper.parentFieldMapper().type())) {
                 throw new IllegalArgumentException("The [_parent.type] option can't point to the same type");
             }
-            if (mapper.type().contains(".") && !PercolatorService.TYPE_NAME.equals(mapper.type())) {
-                logger.warn("Type [{}] contains a '.', it is recommended not to include it within a type name", mapper.type());
+            if (typeNameStartsWithIllegalDot(mapper)) {
+                if (Version.indexCreated(indexSettings).onOrAfter(Version.V_2_0_0_beta1)) {
+                    throw new IllegalArgumentException("mapping type name [" + mapper.type() + "] must not start with a '.'");
+                } else {
+                    logger.warn("Type [{}] starts with a '.', it is recommended not to start a type name with a '.'", mapper.type());
+                }
             }
             // we can add new field/object mappers while the old ones are there
             // since we get new instances of those, and when we remove, we remove
@@ -313,6 +310,10 @@ public class MapperService extends AbstractIndexComponent  {
                 return mapper;
             }
         }
+    }
+
+    private boolean typeNameStartsWithIllegalDot(DocumentMapper mapper) {
+        return mapper.type().startsWith(".") && !PercolatorService.TYPE_NAME.equals(mapper.type());
     }
 
     private boolean assertSerialization(DocumentMapper mapper) {
@@ -383,16 +384,16 @@ public class MapperService extends AbstractIndexComponent  {
      * Returns the document mapper created, including a mapping update if the
      * type has been dynamically created.
      */
-    public Tuple<DocumentMapper, Mapping> documentMapperWithAutoCreate(String type) {
+    public DocumentMapperForType documentMapperWithAutoCreate(String type) {
         DocumentMapper mapper = mappers.get(type);
         if (mapper != null) {
-            return Tuple.tuple(mapper, null);
+            return new DocumentMapperForType(mapper, null);
         }
         if (!dynamic) {
             throw new TypeMissingException(index, type, "trying to auto create mapping, but dynamic mapping is disabled");
         }
         mapper = parse(type, null, true);
-        return Tuple.tuple(mapper, mapper.mapping());
+        return new DocumentMapperForType(mapper, mapper.mapping());
     }
 
     /**

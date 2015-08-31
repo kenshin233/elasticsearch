@@ -39,14 +39,14 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.MockDirectoryWrapper;
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.TestUtil;
+import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.Version;
-import org.elasticsearch.bwcompat.OldIndexBackwardsCompatibilityTests;
+import org.elasticsearch.bwcompat.OldIndexBackwardsCompatibilityIT;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.Base64;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.io.FileSystemUtils;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.lucene.uid.Versions;
@@ -66,7 +66,6 @@ import org.elasticsearch.index.mapper.ParseContext.Document;
 import org.elasticsearch.index.mapper.internal.SourceFieldMapper;
 import org.elasticsearch.index.mapper.internal.UidFieldMapper;
 import org.elasticsearch.index.mapper.object.RootObjectMapper;
-import org.elasticsearch.index.settings.IndexDynamicSettingsModule;
 import org.elasticsearch.index.shard.MergeSchedulerConfig;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.shard.ShardUtils;
@@ -79,7 +78,7 @@ import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.index.translog.TranslogConfig;
 import org.elasticsearch.index.translog.TranslogTests;
 import org.elasticsearch.test.DummyShardLock;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.hamcrest.MatcherAssert;
 import org.junit.After;
@@ -102,7 +101,7 @@ import static org.elasticsearch.index.engine.Engine.Operation.Origin.PRIMARY;
 import static org.elasticsearch.index.engine.Engine.Operation.Origin.REPLICA;
 import static org.hamcrest.Matchers.*;
 
-public class InternalEngineTests extends ElasticsearchTestCase {
+public class InternalEngineTests extends ESTestCase {
 
     private static final Pattern PARSE_LEGACY_ID_PATTERN = Pattern.compile("^" + Translog.TRANSLOG_FILE_PREFIX + "(\\d+)((\\.recovering))?$");
 
@@ -256,7 +255,11 @@ public class InternalEngineTests extends ElasticsearchTestCase {
                 // we don't need to notify anybody in this test
             }
         }, new TranslogHandler(shardId.index().getName()), IndexSearcher.getDefaultQueryCache(), IndexSearcher.getDefaultQueryCachingPolicy(), new IndexSearcherWrappingService(new HashSet<>(Arrays.asList(wrappers))), translogConfig);
-
+        try {
+            config.setCreate(Lucene.indexExists(store.directory()) == false);
+        } catch (IOException e) {
+            throw new ElasticsearchException("can't find index?", e);
+        }
         return config;
     }
 
@@ -505,7 +508,7 @@ public class InternalEngineTests extends ElasticsearchTestCase {
             }
 
             @Override
-            public IndexSearcher wrap(IndexSearcher searcher) throws EngineException {
+            public IndexSearcher wrap(EngineConfig engineConfig, IndexSearcher searcher) throws EngineException {
                 counter.incrementAndGet();
                 return searcher;
             }
@@ -775,6 +778,7 @@ public class InternalEngineTests extends ElasticsearchTestCase {
             // this so we have to disable the check explicitly
             directory.setPreventDoubleWrite(false);
         }
+        config.setCreate(false);
         engine = new InternalEngine(config, false);
         assertNull("Sync ID must be gone since we have a document to replay", engine.getLastCommittedSegmentInfos().getUserData().get(Engine.SYNC_COMMIT_ID));
     }
@@ -1378,7 +1382,6 @@ public class InternalEngineTests extends ElasticsearchTestCase {
         }
     }
 
-    @Slow
     @Test
     public void testEnableGcDeletes() throws Exception {
         try (Store store = createStore();
@@ -1506,11 +1509,6 @@ public class InternalEngineTests extends ElasticsearchTestCase {
         assertEquals(currentIndexWriterConfig.getCodec().getName(), codecService.codec(codecName).getName());
         assertEquals(engine.config().getIndexConcurrency(), indexConcurrency);
         assertEquals(currentIndexWriterConfig.getMaxThreadStates(), indexConcurrency);
-
-
-        IndexDynamicSettingsModule settings = new IndexDynamicSettingsModule();
-        assertTrue(settings.containsSetting(EngineConfig.INDEX_COMPOUND_ON_FLUSH));
-        assertTrue(settings.containsSetting(EngineConfig.INDEX_GC_DELETES_SETTING));
     }
 
     @Test
@@ -1750,7 +1748,7 @@ public class InternalEngineTests extends ElasticsearchTestCase {
 
     public void testUpgradeOldIndex() throws IOException {
         List<Path> indexes = new ArrayList<>();
-        Path dir = getDataPath("/" + OldIndexBackwardsCompatibilityTests.class.getPackage().getName().replace('.', '/')); // the files are in the same pkg as the OldIndexBackwardsCompatibilityTests test
+        Path dir = getDataPath("/" + OldIndexBackwardsCompatibilityIT.class.getPackage().getName().replace('.', '/')); // the files are in the same pkg as the OldIndexBackwardsCompatibilityTests test
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, "index-*.zip")) {
             for (Path path : stream) {
                 indexes.add(path);
@@ -1870,6 +1868,7 @@ public class InternalEngineTests extends ElasticsearchTestCase {
         parser.mappingUpdate = dynamicUpdate();
 
         engine.close();
+        engine.config().setCreate(false);
         engine = new InternalEngine(engine.config(), false); // we need to reuse the engine config unless the parser.mappingModified won't work
 
         try (Engine.Searcher searcher = engine.acquireSearcher("test")) {
@@ -1958,8 +1957,8 @@ public class InternalEngineTests extends ElasticsearchTestCase {
         }
 
         @Override
-        protected Tuple<DocumentMapper, Mapping> docMapper(String type) {
-            return new Tuple<>(docMapper, mappingUpdate);
+        protected DocumentMapperForType docMapper(String type) {
+            return new DocumentMapperForType(docMapper, mappingUpdate);
         }
 
         @Override

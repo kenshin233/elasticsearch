@@ -19,16 +19,14 @@
 
 package org.elasticsearch.bootstrap;
 
-import org.apache.lucene.util.StringHelper;
 import org.apache.lucene.util.Constants;
-import org.elasticsearch.ExceptionsHelper;
+import org.apache.lucene.util.StringHelper;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.PidFile;
 import org.elasticsearch.common.SuppressForbidden;
+import org.elasticsearch.common.cli.CliTool;
 import org.elasticsearch.common.cli.Terminal;
 import org.elasticsearch.common.collect.Tuple;
-import org.elasticsearch.common.inject.CreationException;
-import org.elasticsearch.common.inject.spi.Message;
 import org.elasticsearch.common.lease.Releasables;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
@@ -43,16 +41,14 @@ import org.elasticsearch.node.NodeBuilder;
 import org.elasticsearch.node.internal.InternalSettingsPreparer;
 
 import java.util.Locale;
-import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
-import static com.google.common.collect.Sets.newHashSet;
 import static org.elasticsearch.common.settings.Settings.Builder.EMPTY_SETTINGS;
 
 /**
- * A main entry point when starting from the command line.
+ * Internal startup code.
  */
-public class Bootstrap {
+final class Bootstrap {
 
     private static volatile Bootstrap INSTANCE;
 
@@ -136,10 +132,6 @@ public class Bootstrap {
         OsProbe.getInstance();
     }
 
-    public static boolean isMemoryLocked() {
-        return Natives.isMemoryLocked();
-    }
-
     private void setup(boolean addShutdownHook, Settings settings, Environment environment) throws Exception {
         initializeNatives(settings.getAsBoolean("bootstrap.mlockall", false),
                 settings.getAsBoolean("bootstrap.ctrlhandler", true));
@@ -191,7 +183,7 @@ public class Bootstrap {
     @SuppressForbidden(reason = "Exception#printStackTrace()")
     private static void setupLogging(Settings settings, Environment environment) {
         try {
-            settings.getClassLoader().loadClass("org.apache.log4j.Logger");
+            Class.forName("org.apache.log4j.Logger");
             LogConfigurator.configure(settings);
         } catch (ClassNotFoundException e) {
             // no log4j
@@ -221,37 +213,36 @@ public class Bootstrap {
         }
     }
 
-    public static void main(String[] args) {
+    /**
+     * This method is invoked by {@link Elasticsearch#main(String[])}
+     * to startup elasticsearch.
+     */
+    static void init(String[] args) throws Throwable {
+        BootstrapCLIParser bootstrapCLIParser = new BootstrapCLIParser();
+        CliTool.ExitStatus status = bootstrapCLIParser.execute(args);
+
+        if (CliTool.ExitStatus.OK != status) {
+            System.exit(status.status());
+        }
+
         System.setProperty("es.logger.prefix", "");
         INSTANCE = new Bootstrap();
 
-        boolean foreground = System.getProperty("es.foreground", System.getProperty("es-foreground")) != null;
+        boolean foreground = !"false".equals(System.getProperty("es.foreground", System.getProperty("es-foreground")));
         // handle the wrapper system property, if its a service, don't run as a service
         if (System.getProperty("wrapper.service", "XXX").equalsIgnoreCase("true")) {
             foreground = false;
         }
 
-        String stage = "Settings";
+        Tuple<Settings, Environment> tuple = initialSettings(foreground);
+        Settings settings = tuple.v1();
+        Environment environment = tuple.v2();
 
-        Settings settings = null;
-        Environment environment = null;
-        try {
-            Tuple<Settings, Environment> tuple = initialSettings(foreground);
-            settings = tuple.v1();
-            environment = tuple.v2();
-
-            if (environment.pidFile() != null) {
-                stage = "Pid";
-                PidFile.create(environment.pidFile(), true);
-            }
-
-            stage = "Logging";
-            setupLogging(settings, environment);
-        } catch (Exception e) {
-            String errorMessage = buildErrorMessage(stage, e);
-            sysError(errorMessage, true);
-            System.exit(3);
+        if (environment.pidFile() != null) {
+            PidFile.create(environment.pidFile(), true);
         }
+
+        setupLogging(settings, environment);
 
         if (System.getProperty("es.max-open-files", "false").equals("true")) {
             ESLogger logger = Loggers.getLogger(Bootstrap.class);
@@ -264,7 +255,6 @@ public class Bootstrap {
             logger.warn("jvm uses the client vm, make sure to run `java` with the server vm for best performance by adding `-server` to the command line");
         }
 
-        stage = "Initialization";
         try {
             if (!foreground) {
                 Loggers.disableConsoleLogging();
@@ -276,25 +266,27 @@ public class Bootstrap {
 
             INSTANCE.setup(true, settings, environment);
 
-            stage = "Startup";
             INSTANCE.start();
 
             if (!foreground) {
                 closeSysError();
             }
         } catch (Throwable e) {
+            // disable console logging, so user does not see the exception twice (jvm will show it already)
+            if (foreground) {
+                Loggers.disableConsoleLogging();
+            }
             ESLogger logger = Loggers.getLogger(Bootstrap.class);
             if (INSTANCE.node != null) {
                 logger = Loggers.getLogger(Bootstrap.class, INSTANCE.node.settings().get("name"));
             }
-            String errorMessage = buildErrorMessage(stage, e);
-            if (foreground) {
-                sysError(errorMessage, true);
-                Loggers.disableConsoleLogging();
-            }
             logger.error("Exception", e);
+            // re-enable it if appropriate, so they can see any logging during the shutdown process
+            if (foreground) {
+                Loggers.enableConsoleLogging();
+            }
             
-            System.exit(3);
+            throw e;
         }
     }
 
@@ -315,38 +307,4 @@ public class Bootstrap {
             System.err.flush();
         }
     }
-
-    private static String buildErrorMessage(String stage, Throwable e) {
-        StringBuilder errorMessage = new StringBuilder("{").append(Version.CURRENT).append("}: ");
-        errorMessage.append(stage).append(" Failed ...\n");
-        if (e instanceof CreationException) {
-            CreationException createException = (CreationException) e;
-            Set<String> seenMessages = newHashSet();
-            int counter = 1;
-            for (Message message : createException.getErrorMessages()) {
-                String detailedMessage;
-                if (message.getCause() == null) {
-                    detailedMessage = message.getMessage();
-                } else {
-                    detailedMessage = ExceptionsHelper.detailedMessage(message.getCause(), true, 0);
-                }
-                if (detailedMessage == null) {
-                    detailedMessage = message.getMessage();
-                }
-                if (seenMessages.contains(detailedMessage)) {
-                    continue;
-                }
-                seenMessages.add(detailedMessage);
-                errorMessage.append("").append(counter++).append(") ").append(detailedMessage);
-            }
-        } else {
-            errorMessage.append("- ").append(ExceptionsHelper.detailedMessage(e, true, 0));
-        }
-        if (Loggers.getLogger(Bootstrap.class).isDebugEnabled()) {
-            errorMessage.append("\n").append(ExceptionsHelper.stackTrace(e));
-        }
-        return errorMessage.toString();
-    }
-    
-
 }

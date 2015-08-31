@@ -35,10 +35,20 @@ import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.LocalTransportAddress;
 import org.elasticsearch.common.transport.TransportAddress;
+import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.transport.*;
+import org.elasticsearch.transport.ConnectTransportException;
+import org.elasticsearch.transport.Transport;
+import org.elasticsearch.transport.TransportException;
+import org.elasticsearch.transport.TransportModule;
+import org.elasticsearch.transport.TransportRequest;
+import org.elasticsearch.transport.TransportRequestOptions;
+import org.elasticsearch.transport.TransportResponse;
+import org.elasticsearch.transport.TransportResponseHandler;
+import org.elasticsearch.transport.TransportService;
 import org.junit.Test;
 
+import java.util.Collection;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -54,12 +64,13 @@ public class TransportClientHeadersTests extends AbstractClientHeadersTests {
 
     @Override
     protected Client buildClient(Settings headersSettings, GenericAction[] testedActions) {
-        TransportClient client = TransportClient.builder().settings(Settings.builder()
+        TransportClient client = TransportClient.builder()
+            .settings(Settings.builder()
                 .put("client.transport.sniff", false)
                 .put("node.name", "transport_client_" + this.getTestName())
-                .put(TransportModule.TRANSPORT_SERVICE_TYPE_KEY, InternalTransportService.class.getName())
                 .put(headersSettings)
-                .build()).build();
+                .build())
+            .addPlugin(InternalTransportService.TestPlugin.class).build();
 
         client.addTransportAddress(address);
         return client;
@@ -67,15 +78,17 @@ public class TransportClientHeadersTests extends AbstractClientHeadersTests {
 
     @Test
     public void testWithSniffing() throws Exception {
-        TransportClient client = TransportClient.builder().settings(Settings.builder()
+        TransportClient client = TransportClient.builder()
+            .settings(Settings.builder()
                 .put("client.transport.sniff", true)
                 .put("cluster.name", "cluster1")
                 .put("node.name", "transport_client_" + this.getTestName() + "_1")
                 .put("client.transport.nodes_sampler_interval", "1s")
-                .put(TransportModule.TRANSPORT_SERVICE_TYPE_KEY, InternalTransportService.class.getName())
                 .put(HEADER_SETTINGS)
-                .put("path.home", createTempDir().toString())
-                .build()).build();
+                .put("path.home", createTempDir().toString()).build())
+            .addPlugin(InternalTransportService.TestPlugin.class)
+            .build();
+
         try {
             client.addTransportAddress(address);
 
@@ -94,6 +107,24 @@ public class TransportClientHeadersTests extends AbstractClientHeadersTests {
     }
 
     public static class InternalTransportService extends TransportService {
+
+        public static class TestPlugin extends Plugin {
+            @Override
+            public String name() {
+                return "mock-transport-service";
+            }
+            @Override
+            public String description() {
+                return "a mock transport service";
+            }
+            public void onModule(TransportModule transportModule) {
+                transportModule.addTransportService("internal", InternalTransportService.class);
+            }
+            @Override
+            public Settings additionalSettings() {
+                return Settings.builder().put(TransportModule.TRANSPORT_SERVICE_TYPE_KEY, "internal").build();
+            }
+        }
 
         CountDownLatch clusterStateLatch = new CountDownLatch(1);
 

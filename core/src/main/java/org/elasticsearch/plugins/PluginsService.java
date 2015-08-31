@@ -22,9 +22,14 @@ package org.elasticsearch.plugins;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 
+import org.apache.lucene.analysis.util.CharFilterFactory;
+import org.apache.lucene.analysis.util.TokenFilterFactory;
+import org.apache.lucene.analysis.util.TokenizerFactory;
+import org.apache.lucene.codecs.Codec;
+import org.apache.lucene.codecs.DocValuesFormat;
+import org.apache.lucene.codecs.PostingsFormat;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.action.admin.cluster.node.info.PluginsInfo;
-import org.elasticsearch.bootstrap.Bootstrap;
 import org.elasticsearch.bootstrap.JarHell;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.collect.MapBuilder;
@@ -65,10 +70,10 @@ public class PluginsService extends AbstractComponent {
     /**
      * We keep around a list of plugins
      */
-    private final ImmutableList<Tuple<PluginInfo, Plugin>> plugins;
+    private final List<Tuple<PluginInfo, Plugin>> plugins;
     private final PluginsInfo info;
 
-    private final ImmutableMap<Plugin, List<OnModuleReference>> onModuleReferences;
+    private final Map<Plugin, List<OnModuleReference>> onModuleReferences;
 
     static class OnModuleReference {
         public final Class<? extends Module> moduleClass;
@@ -84,20 +89,19 @@ public class PluginsService extends AbstractComponent {
      * Constructs a new PluginService
      * @param settings The settings of the system
      * @param environment The environment of the system
+     * @param classpathPlugins Plugins that exist in the classpath which should be loaded
      */
-    public PluginsService(Settings settings, Environment environment) {
+    public PluginsService(Settings settings, Environment environment, Collection<Class<? extends Plugin>> classpathPlugins) {
         super(settings);
 
-        ImmutableList.Builder<Tuple<PluginInfo, Plugin>> tupleBuilder = ImmutableList.builder();
+        List<Tuple<PluginInfo, Plugin>> tupleBuilder = new ArrayList<>();
 
-        // first we load specified plugins via 'plugin.types' settings parameter.
-        // this is a hack for what is between unit and integration tests...
-        String[] defaultPluginsClasses = settings.getAsArray("plugin.types");
-        for (String pluginClass : defaultPluginsClasses) {
+        // first we load plugins that are on the classpath. this is for tests and transport clients
+        for (Class<? extends Plugin> pluginClass : classpathPlugins) {
             Plugin plugin = loadPlugin(pluginClass, settings);
-            PluginInfo pluginInfo = new PluginInfo(plugin.name(), plugin.description(), false, "NA", true, pluginClass, false);
+            PluginInfo pluginInfo = new PluginInfo(plugin.name(), plugin.description(), false, "NA", true, pluginClass.getName(), false);
             if (logger.isTraceEnabled()) {
-                logger.trace("plugin loaded from settings [{}]", pluginInfo);
+                logger.trace("plugin loaded from classpath [{}]", pluginInfo);
             }
             tupleBuilder.add(new Tuple<>(pluginInfo, plugin));
         }
@@ -107,10 +111,10 @@ public class PluginsService extends AbstractComponent {
           List<Bundle> bundles = getPluginBundles(environment);
           tupleBuilder.addAll(loadBundles(bundles));
         } catch (IOException ex) {
-          throw new IllegalStateException("Can't load plugins into classloader", ex);
+          throw new IllegalStateException("Unable to initialize plugins", ex);
         }
 
-        plugins = tupleBuilder.build();
+        plugins = Collections.unmodifiableList(tupleBuilder);
         info = new PluginsInfo();
         for (Tuple<PluginInfo, Plugin> tuple : plugins) {
             info.add(tuple.v1());
@@ -123,7 +127,7 @@ public class PluginsService extends AbstractComponent {
         for (Tuple<PluginInfo, Plugin> tuple : plugins) {
             PluginInfo info = tuple.v1();
             if (info.isJvm()) {
-                jvmPlugins.put(tuple.v2().name(), tuple.v2());
+                jvmPlugins.put(info.getName(), tuple.v2());
             }
             if (info.isSite()) {
                 sitePlugins.add(info.getName());
@@ -146,7 +150,7 @@ public class PluginsService extends AbstractComponent {
 
         logger.info("loaded {}, sites {}", jvmPlugins.keySet(), sitePlugins);
 
-        MapBuilder<Plugin, List<OnModuleReference>> onModuleReferences = MapBuilder.newMapBuilder();
+        Map<Plugin, List<OnModuleReference>> onModuleReferences = new HashMap<>();
         for (Plugin plugin : jvmPlugins.values()) {
             List<OnModuleReference> list = new ArrayList<>();
             for (Method method : plugin.getClass().getMethods()) {
@@ -168,10 +172,10 @@ public class PluginsService extends AbstractComponent {
                 onModuleReferences.put(plugin, list);
             }
         }
-        this.onModuleReferences = onModuleReferences.immutableMap();
+        this.onModuleReferences = Collections.unmodifiableMap(onModuleReferences);
     }
 
-    public ImmutableList<Tuple<PluginInfo, Plugin>> plugins() {
+    public List<Tuple<PluginInfo, Plugin>> plugins() {
         return plugins;
     }
 
@@ -183,7 +187,6 @@ public class PluginsService extends AbstractComponent {
 
     public void processModule(Module module) {
         for (Tuple<PluginInfo, Plugin> plugin : plugins()) {
-            plugin.v2().processModule(module);
             // see if there are onModule references
             List<OnModuleReference> references = onModuleReferences.get(plugin.v2());
             if (references != null) {
@@ -201,50 +204,42 @@ public class PluginsService extends AbstractComponent {
     }
 
     public Settings updatedSettings() {
-        Settings.Builder builder = Settings.settingsBuilder()
-                .put(this.settings);
+        Map<String, String> foundSettings = new HashMap<>();
+        final Settings.Builder builder = Settings.settingsBuilder();
         for (Tuple<PluginInfo, Plugin> plugin : plugins) {
-            builder.put(plugin.v2().additionalSettings());
+            Settings settings = plugin.v2().additionalSettings();
+            for (String setting : settings.getAsMap().keySet()) {
+                String oldPlugin = foundSettings.put(setting, plugin.v1().getName());
+                if (oldPlugin != null) {
+                    throw new IllegalArgumentException("Cannot have additional setting [" + setting + "] " +
+                        "in plugin [" + plugin.v1().getName() + "], already added in plugin [" + oldPlugin + "]");
+                }
+            }
+            builder.put(settings);
         }
-        return builder.build();
+        return builder.put(this.settings).build();
     }
 
-    public Collection<Class<? extends Module>> modules() {
-        List<Class<? extends Module>> modules = new ArrayList<>();
-        for (Tuple<PluginInfo, Plugin> plugin : plugins) {
-            modules.addAll(plugin.v2().modules());
-        }
-        return modules;
-    }
-
-    public Collection<Module> modules(Settings settings) {
+    public Collection<Module> nodeModules() {
         List<Module> modules = new ArrayList<>();
         for (Tuple<PluginInfo, Plugin> plugin : plugins) {
-            modules.addAll(plugin.v2().modules(settings));
+            modules.addAll(plugin.v2().nodeModules());
         }
         return modules;
     }
 
-    public Collection<Class<? extends LifecycleComponent>> services() {
+    public Collection<Class<? extends LifecycleComponent>> nodeServices() {
         List<Class<? extends LifecycleComponent>> services = new ArrayList<>();
         for (Tuple<PluginInfo, Plugin> plugin : plugins) {
-            services.addAll(plugin.v2().services());
+            services.addAll(plugin.v2().nodeServices());
         }
         return services;
     }
 
-    public Collection<Class<? extends Module>> indexModules() {
-        List<Class<? extends Module>> modules = new ArrayList<>();
-        for (Tuple<PluginInfo, Plugin> plugin : plugins) {
-            modules.addAll(plugin.v2().indexModules());
-        }
-        return modules;
-    }
-
-    public Collection<Module> indexModules(Settings settings) {
+    public Collection<Module> indexModules(Settings indexSettings) {
         List<Module> modules = new ArrayList<>();
         for (Tuple<PluginInfo, Plugin> plugin : plugins) {
-            modules.addAll(plugin.v2().indexModules(settings));
+            modules.addAll(plugin.v2().indexModules(indexSettings));
         }
         return modules;
     }
@@ -257,18 +252,10 @@ public class PluginsService extends AbstractComponent {
         return services;
     }
 
-    public Collection<Class<? extends Module>> shardModules() {
-        List<Class<? extends Module>> modules = new ArrayList<>();
-        for (Tuple<PluginInfo, Plugin> plugin : plugins) {
-            modules.addAll(plugin.v2().shardModules());
-        }
-        return modules;
-    }
-
-    public Collection<Module> shardModules(Settings settings) {
+    public Collection<Module> shardModules(Settings indexSettings) {
         List<Module> modules = new ArrayList<>();
         for (Tuple<PluginInfo, Plugin> plugin : plugins) {
-            modules.addAll(plugin.v2().shardModules(settings));
+            modules.addAll(plugin.v2().shardModules(indexSettings));
         }
         return modules;
     }
@@ -296,9 +283,10 @@ public class PluginsService extends AbstractComponent {
     }
 
     static List<Bundle> getPluginBundles(Environment environment) throws IOException {
-        ESLogger logger = Loggers.getLogger(Bootstrap.class);
+        ESLogger logger = Loggers.getLogger(PluginsService.class);
 
         Path pluginsDirectory = environment.pluginsFile();
+        // TODO: remove this leniency, but tests bogusly rely on it
         if (!isAccessibleDirectory(pluginsDirectory, logger)) {
             return Collections.emptyList();
         }
@@ -309,34 +297,30 @@ public class PluginsService extends AbstractComponent {
 
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(pluginsDirectory)) {
             for (Path plugin : stream) {
-                try {
-                    if (FileSystemUtils.isHidden(plugin)) {
-                        logger.trace("--- skip hidden plugin file[{}]", plugin.toAbsolutePath());
-                        continue;
-                    }
-                    logger.trace("--- adding plugin [{}]", plugin.toAbsolutePath());
-                    PluginInfo info = PluginInfo.readFromProperties(plugin);
-                    List<URL> urls = new ArrayList<>();
-                    if (info.isJvm()) {
-                        // a jvm plugin: gather urls for jar files
-                        try (DirectoryStream<Path> jarStream = Files.newDirectoryStream(plugin, "*.jar")) {
-                            for (Path jar : jarStream) {
-                                urls.add(jar.toUri().toURL());
-                            }
+                if (FileSystemUtils.isHidden(plugin)) {
+                    logger.trace("--- skip hidden plugin file[{}]", plugin.toAbsolutePath());
+                    continue;
+                }
+                logger.trace("--- adding plugin [{}]", plugin.toAbsolutePath());
+                PluginInfo info = PluginInfo.readFromProperties(plugin);
+                List<URL> urls = new ArrayList<>();
+                if (info.isJvm()) {
+                    // a jvm plugin: gather urls for jar files
+                    try (DirectoryStream<Path> jarStream = Files.newDirectoryStream(plugin, "*.jar")) {
+                        for (Path jar : jarStream) {
+                            urls.add(jar.toUri().toURL());
                         }
                     }
-                    final Bundle bundle;
-                    if (info.isJvm() && info.isIsolated() == false) {
-                        bundle = bundles.get(0); // purgatory
-                    } else {
-                        bundle = new Bundle();
-                        bundles.add(bundle);
-                    }
-                    bundle.plugins.add(info);
-                    bundle.urls.addAll(urls);
-                } catch (Throwable e) {
-                    logger.warn("failed to add plugin [" + plugin + "]", e);
                 }
+                final Bundle bundle;
+                if (info.isJvm() && info.isIsolated() == false) {
+                    bundle = bundles.get(0); // purgatory
+                } else {
+                    bundle = new Bundle();
+                    bundles.add(bundle);
+                }
+                bundle.plugins.add(info);
+                bundle.urls.addAll(urls);
             }
         }
         
@@ -351,7 +335,7 @@ public class PluginsService extends AbstractComponent {
             // pluginmanager does it, but we do it again, in case lusers mess with jar files manually
             try {
                 final List<URL> jars = new ArrayList<>();
-                ClassLoader parentLoader = settings.getClassLoader();
+                ClassLoader parentLoader = getClass().getClassLoader();
                 if (parentLoader instanceof URLClassLoader) {
                     for (URL url : ((URLClassLoader) parentLoader).getURLs()) {
                         jars.add(url);
@@ -360,38 +344,56 @@ public class PluginsService extends AbstractComponent {
                 jars.addAll(bundle.urls);
                 JarHell.checkJarHell(jars.toArray(new URL[0]));
             } catch (Exception e) {
-                logger.warn("failed to load bundle {} due to jar hell", bundle.urls);
+                throw new IllegalStateException("failed to load bundle " + bundle.urls + " due to jar hell", e);
             }
             
             // create a child to load the plugins in this bundle
-            ClassLoader loader = URLClassLoader.newInstance(bundle.urls.toArray(new URL[0]), settings.getClassLoader());
-            Settings settings = Settings.builder()
-                    .put(this.settings)
-                    .classLoader(loader)
-                    .build();
-
+            ClassLoader loader = URLClassLoader.newInstance(bundle.urls.toArray(new URL[0]), getClass().getClassLoader());
             for (PluginInfo pluginInfo : bundle.plugins) {
-                try {
-                    final Plugin plugin;
-                    if (pluginInfo.isJvm()) {
-                        plugin = loadPlugin(pluginInfo.getClassname(), settings);
-                    } else {
-                        plugin = null;
-                    }
-                    plugins.add(new Tuple<>(pluginInfo, plugin));
-                } catch (Throwable e) {
-                    logger.warn("failed to load plugin from [" + bundle.urls + "]", e);
+                final Plugin plugin;
+                if (pluginInfo.isJvm()) {
+                    // reload lucene SPI with any new services from the plugin
+                    reloadLuceneSPI(loader);
+                    Class<? extends Plugin> pluginClass = loadPluginClass(pluginInfo.getClassname(), loader);
+                    plugin = loadPlugin(pluginClass, settings);
+                } else {
+                    plugin = new SitePlugin(pluginInfo.getName(), pluginInfo.getDescription());
                 }
+                plugins.add(new Tuple<>(pluginInfo, plugin));
             }
         }
 
         return plugins.build();
     }
 
-    private Plugin loadPlugin(String className, Settings settings) {
-        try {
-            Class<? extends Plugin> pluginClass = settings.getClassLoader().loadClass(className).asSubclass(Plugin.class);
+    /**
+     * Reloads all Lucene SPI implementations using the new classloader.
+     * This method must be called after the new classloader has been created to
+     * register the services for use.
+     */
+    static void reloadLuceneSPI(ClassLoader loader) {
+        // do NOT change the order of these method calls!
 
+        // Codecs:
+        PostingsFormat.reloadPostingsFormats(loader);
+        DocValuesFormat.reloadDocValuesFormats(loader);
+        Codec.reloadCodecs(loader);
+        // Analysis:
+        CharFilterFactory.reloadCharFilters(loader);
+        TokenFilterFactory.reloadTokenFilters(loader);
+        TokenizerFactory.reloadTokenizers(loader);
+    }
+
+    private Class<? extends Plugin> loadPluginClass(String className, ClassLoader loader) {
+        try {
+            return loader.loadClass(className).asSubclass(Plugin.class);
+        } catch (ClassNotFoundException e) {
+            throw new ElasticsearchException("Could not find plugin class [" + className + "]", e);
+        }
+    }
+
+    private Plugin loadPlugin(Class<? extends Plugin> pluginClass, Settings settings) {
+        try {
             try {
                 return pluginClass.getConstructor(Settings.class).newInstance(settings);
             } catch (NoSuchMethodException e) {
@@ -399,13 +401,12 @@ public class PluginsService extends AbstractComponent {
                     return pluginClass.getConstructor().newInstance();
                 } catch (NoSuchMethodException e1) {
                     throw new ElasticsearchException("No constructor for [" + pluginClass + "]. A plugin class must " +
-                            "have either an empty default constructor or a single argument constructor accepting a " +
-                            "Settings instance");
+                        "have either an empty default constructor or a single argument constructor accepting a " +
+                        "Settings instance");
                 }
             }
-
         } catch (Throwable e) {
-            throw new ElasticsearchException("Failed to load plugin class [" + className + "]", e);
+            throw new ElasticsearchException("Failed to load plugin class [" + pluginClass.getName() + "]", e);
         }
     }
 }

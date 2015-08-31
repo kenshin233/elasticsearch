@@ -21,8 +21,8 @@ package org.elasticsearch.search.internal;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.MultimapBuilder;
+import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.Query;
-import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.util.Counter;
 import org.elasticsearch.action.search.SearchType;
@@ -45,12 +45,12 @@ import org.elasticsearch.index.query.QueryParseContext;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.similarity.SimilarityService;
 import org.elasticsearch.script.ScriptService;
-import org.elasticsearch.search.Scroll;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.aggregations.SearchContextAggregations;
 import org.elasticsearch.search.dfs.DfsSearchResult;
 import org.elasticsearch.search.fetch.FetchSearchResult;
-import org.elasticsearch.search.fetch.fielddata.FieldDataFieldsContext;
+import org.elasticsearch.search.fetch.FetchSubPhase;
+import org.elasticsearch.search.fetch.FetchSubPhaseContext;
 import org.elasticsearch.search.fetch.innerhits.InnerHitsContext;
 import org.elasticsearch.search.fetch.script.ScriptFieldsContext;
 import org.elasticsearch.search.fetch.source.FetchSourceContext;
@@ -64,6 +64,7 @@ import org.elasticsearch.search.suggest.SuggestionSearchContext;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public abstract class SearchContext implements Releasable, HasContextAndHeaders {
@@ -155,13 +156,15 @@ public abstract class SearchContext implements Releasable, HasContextAndHeaders 
 
     protected abstract long nowInMillisImpl();
 
-    public abstract Scroll scroll();
+    public abstract ScrollContext scrollContext();
 
-    public abstract SearchContext scroll(Scroll scroll);
+    public abstract SearchContext scrollContext(ScrollContext scroll);
 
     public abstract SearchContextAggregations aggregations();
 
     public abstract SearchContext aggregations(SearchContextAggregations aggregations);
+
+    public abstract  <SubPhaseContext extends FetchSubPhaseContext> SubPhaseContext getFetchSubPhaseContext(FetchSubPhase.ContextFactory<SubPhaseContext> contextFactory);
 
     public abstract SearchContextHighlight highlight();
 
@@ -181,10 +184,6 @@ public abstract class SearchContext implements Releasable, HasContextAndHeaders 
     public abstract List<RescoreSearchContext> rescore();
 
     public abstract void addRescore(RescoreSearchContext rescore);
-
-    public abstract boolean hasFieldDataFields();
-
-    public abstract FieldDataFieldsContext fieldDataFields();
 
     public abstract boolean hasScriptFields();
 
@@ -258,16 +257,6 @@ public abstract class SearchContext implements Releasable, HasContextAndHeaders 
      */
     public abstract Query query();
 
-    /**
-     * Has the query been rewritten already?
-     */
-    public abstract boolean queryRewritten();
-
-    /**
-     * Rewrites the query and updates it. Only happens once.
-     */
-    public abstract SearchContext updateRewriteQuery(Query rewriteQuery);
-
     public abstract int from();
 
     public abstract SearchContext from(int from);
@@ -310,10 +299,6 @@ public abstract class SearchContext implements Releasable, HasContextAndHeaders 
     public abstract long keepAlive();
 
     public abstract void keepAlive(long keepAlive);
-
-    public abstract void lastEmittedDoc(ScoreDoc doc);
-
-    public abstract ScoreDoc lastEmittedDoc();
 
     public abstract SearchLookup lookup();
 
@@ -359,6 +344,9 @@ public abstract class SearchContext implements Releasable, HasContextAndHeaders 
     public abstract ObjectMapper getObjectMapper(String name);
 
     public abstract Counter timeEstimateCounter();
+
+    /** Return a view of the additional query collectors that should be run for this context. */
+    public abstract Map<Class<?>, Collector> queryCollectors();
 
     /**
      * The life time of an object that is used during search execution.

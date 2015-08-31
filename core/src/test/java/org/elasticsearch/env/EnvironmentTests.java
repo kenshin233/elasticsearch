@@ -22,7 +22,7 @@ import com.google.common.base.Charsets;
 import org.elasticsearch.common.io.FileSystemUtils;
 import org.elasticsearch.common.io.Streams;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.junit.Test;
 
 import java.io.BufferedReader;
@@ -37,7 +37,7 @@ import static org.hamcrest.CoreMatchers.nullValue;
 /**
  * Simple unit-tests for Environment.java
  */
-public class EnvironmentTests extends ElasticsearchTestCase {
+public class EnvironmentTests extends ESTestCase {
 
     public Environment newEnvironment() throws IOException {
         return newEnvironment(Settings.EMPTY);
@@ -49,28 +49,6 @@ public class EnvironmentTests extends ElasticsearchTestCase {
                 .put("path.home", createTempDir().toAbsolutePath())
                 .putArray("path.data", tmpPaths()).build();
         return new Environment(build);
-    }
-
-    @Test
-    public void testResolveJaredResource() throws IOException {
-        Environment environment = newEnvironment();
-        URL url = environment.resolveConfig("META-INF/MANIFEST.MF"); // this works because there is one jar having this file in the classpath
-        assertNotNull(url);
-        try (BufferedReader reader = FileSystemUtils.newBufferedReader(url, Charsets.UTF_8)) {
-            String string = Streams.copyToString(reader);
-            assertTrue(string, string.contains("Manifest-Version"));
-        }
-    }
-
-    @Test
-    public void testResolveFileResource() throws IOException {
-        Environment environment = newEnvironment();
-        URL url = environment.resolveConfig("org/elasticsearch/common/cli/tool.help");
-        assertNotNull(url);
-        try (BufferedReader reader = FileSystemUtils.newBufferedReader(url, Charsets.UTF_8)) {
-            String string = Streams.copyToString(reader);
-            assertEquals(string, "tool help");
-        }
     }
 
     @Test

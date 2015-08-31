@@ -5,17 +5,16 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>org.elasticsearch</groupId>
-        <artifactId>elasticsearch-parent</artifactId>
-        <version>2.0.0-beta1-SNAPSHOT</version>
+        <artifactId>parent</artifactId>
+        <version>2.1.0-SNAPSHOT</version>
     </parent>
 
     <groupId>org.elasticsearch.distribution</groupId>
-    <artifactId>elasticsearch-distribution</artifactId>
+    <artifactId>distributions</artifactId>
     <packaging>pom</packaging>
-    <name>Elasticsearch Distribution</name>
+    <name>Distribution: Parent POM</name>
 
     <properties>
-        <skipTests>true</skipTests>
         <!-- Properties used for building RPM & DEB packages (see common/packaging.properties) -->
         <packaging.elasticsearch.home.dir>/usr/share/elasticsearch</packaging.elasticsearch.home.dir>
         <packaging.elasticsearch.bin.dir>/usr/share/elasticsearch/bin</packaging.elasticsearch.bin.dir>
@@ -30,70 +29,49 @@
         <packaging.elasticsearch.systemd.sysctl.dir>/usr/lib/sysctl.d</packaging.elasticsearch.systemd.sysctl.dir>
         <packaging.elasticsearch.tmpfilesd.dir>/usr/lib/tmpfiles.d</packaging.elasticsearch.tmpfilesd.dir>
 
-        <!-- rpmbuild location : default to /usr/bin/rpmbuild -->
-        <packaging.rpm.rpmbuild>/usr/bin/rpmbuild</packaging.rpm.rpmbuild>
+        <!-- Properties for the license checker -->
+        <project.licenses.dir>${project.basedir}/../licenses</project.licenses.dir>
+        <project.licenses.check_target>${integ.scratch}</project.licenses.check_target>
+
+        <!-- we expect packaging formats to have integration tests, but not unit tests -->
+        <skip.unit.tests>true</skip.unit.tests>
     </properties>
 
+    <!-- PUT TEST ONLY DEPS HERE. Let individual distributions figure out what they want -->
     <dependencies>
-        <dependency>
-            <groupId>org.elasticsearch</groupId>
-            <artifactId>elasticsearch</artifactId>
-        </dependency>
-
-        <!-- They were marked as optional in core so we need to explicitly add them -->
-         <dependency>
-            <groupId>org.apache.lucene</groupId>
-            <artifactId>lucene-expressions</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.spatial4j</groupId>
-            <artifactId>spatial4j</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.vividsolutions</groupId>
-            <artifactId>jts</artifactId>
-        </dependency>
-        <!-- needed for templating -->
-        <dependency>
-            <groupId>com.github.spullara.mustache.java</groupId>
-            <artifactId>compiler</artifactId>
-        </dependency>
-       <dependency>
-            <groupId>org.codehaus.groovy</groupId>
-            <artifactId>groovy-all</artifactId>
-            <classifier>indy</classifier>
-        </dependency>
-
-        <dependency>
-            <groupId>log4j</groupId>
-            <artifactId>log4j</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>log4j</groupId>
-            <artifactId>apache-log4j-extras</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>net.java.dev.jna</groupId>
-            <artifactId>jna</artifactId>
-        </dependency>
-        
         <dependency>
             <groupId>com.carrotsearch.randomizedtesting</groupId>
             <artifactId>randomizedtesting-runner</artifactId>
             <scope>test</scope>
         </dependency>
 
+        <dependency>
+            <groupId>org.hamcrest</groupId>
+            <artifactId>hamcrest-all</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.lucene</groupId>
+            <artifactId>lucene-test-framework</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.elasticsearch</groupId>
+            <artifactId>elasticsearch</artifactId>
+            <scope>test</scope>
+            <type>test-jar</type>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpclient</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
-        <finalName>elasticsearch-${project.version}</finalName>
         <plugins>
             <!-- We copy libs for deb and rpm -->
             <plugin>
@@ -112,6 +90,15 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-eclipse-plugin</artifactId>
+                <configuration>
+                    <!-- Many of the modules in this build have the artifactId "elasticsearch"
+                      which break importing into Eclipse without this. -->
+                    <projectNameTemplate>[groupId].[artifactId]</projectNameTemplate>
+                </configuration>
+            </plugin>
         </plugins>
 
         <pluginManagement>
@@ -119,8 +106,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-antrun-plugin</artifactId>
-                    <!-- <version>1.8</version> -->
-                    <!-- <configuration><skip>true</skip></configuration> -->
+                    <!-- checks integration test scratch area (where we extract the distribution) -->
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
@@ -154,17 +140,49 @@
                         </execution>
                     </executions>
                 </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <configuration>
+                        <!-- distribution modules don't provide any jar. No need to upload empty jars to maven central -->
+                        <skipIfEmpty>true</skipIfEmpty>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>com.carrotsearch.randomizedtesting</groupId>
+                    <artifactId>junit4-maven-plugin</artifactId>
+                    <executions>
+                        <execution>
+                            <id>integ-tests</id>
+                            <configuration>
+                                <!-- currently only 1 cpu works, because integ tests don't make "unique" test directories? -->
+                                <parallelism>1</parallelism>
+                                <systemProperties>
+                                    <!-- use external cluster -->
+                                    <tests.cluster>localhost:${integ.transport.port}</tests.cluster>
+                                </systemProperties>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
             </plugins>
         </pluginManagement>
     </build>
 
     <modules>
+        <module>fully-loaded</module>
+        <module>shaded</module>
         <module>tar</module>
         <module>zip</module>
         <module>deb</module>
     </modules>
 
     <profiles>
+        <!--
+            We include automatically RPM module when it's available in common locations.
+            If your rpmbuild is in another location (but in path), run maven with rpm profile:
+             mvn deploy -Prpm
+        -->
         <profile>
             <id>macos_brew</id>
             <activation>
@@ -183,7 +201,7 @@
             <activation>
                 <file>
                     <!-- Folks having /usr/bin/rpmbuild available will be able to build the rpm module -->
-                    <exists>${packaging.rpm.rpmbuild}</exists>
+                    <exists>/usr/bin/rpmbuild</exists>
                 </file>
             </activation>
             <modules>

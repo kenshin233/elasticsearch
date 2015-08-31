@@ -126,17 +126,6 @@ public class URLRepository extends BlobStoreRepository {
         }
     }
 
-    @Override
-    public String startVerification() {
-        //TODO: #7831 Add check that URL exists and accessible
-        return null;
-    }
-
-    @Override
-    public void endVerification(String seed) {
-        throw new UnsupportedOperationException("shouldn't be called");
-    }
-
     /**
      * Makes sure that the url is white listed or if it points to the local file system it matches one on of the root path in path.repo
      */
@@ -156,7 +145,7 @@ public class URLRepository extends BlobStoreRepository {
                     logger.warn("cannot parse the specified url [{}]", url);
                     throw new RepositoryException(repositoryName, "cannot parse the specified url [" + url + "]");
                 }
-                // We didn't match white list - try to resolve against repo.path
+                // We didn't match white list - try to resolve against path.repo
                 URL normalizedUrl = environment.resolveRepoURL(url);
                 if (normalizedUrl == null) {
                     logger.warn("The specified url [{}] doesn't start with any repository paths specified by the path.repo setting: [{}] or by repositories.url.allowed_urls setting: [{}] ", url, environment.repoFiles());
@@ -166,6 +155,11 @@ public class URLRepository extends BlobStoreRepository {
             }
         }
         throw new RepositoryException(repositoryName, "unsupported url protocol [" + protocol + "] from URL [" + url + "]");
+    }
+
+    @Override
+    public boolean readOnly() {
+        return true;
     }
 
 }

@@ -30,7 +30,7 @@ import org.elasticsearch.script.expression.ExpressionScriptEngineService;
 import org.elasticsearch.script.groovy.GroovyScriptEngineService;
 import org.elasticsearch.script.mustache.MustacheScriptEngineService;
 import org.elasticsearch.search.lookup.SearchLookup;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.watcher.ResourceWatcherService;
 import org.junit.Before;
 import org.junit.Test;
@@ -48,7 +48,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.sameInstance;
 
-public class ScriptServiceTests extends ElasticsearchTestCase {
+public class ScriptServiceTests extends ESTestCase {
 
     private ResourceWatcherService resourceWatcherService;
     private Set<ScriptEngineService> scriptEngineServices;
@@ -385,6 +385,73 @@ public class ScriptServiceTests extends ElasticsearchTestCase {
                 }
             }
         }
+    }
+
+    @Test
+    public void testCompileCountedInCompilationStats() throws IOException {
+        buildScriptService(Settings.EMPTY);
+        scriptService.compile(new Script("1+1", ScriptType.INLINE, "test", null), randomFrom(scriptContexts));
+        assertEquals(1L, scriptService.stats().getCompilations());
+    }
+
+    @Test
+    public void testExecutableCountedInCompilationStats() throws IOException {
+        buildScriptService(Settings.EMPTY);
+        scriptService.executable(new Script("1+1", ScriptType.INLINE, "test", null), randomFrom(scriptContexts));
+        assertEquals(1L, scriptService.stats().getCompilations());
+    }
+
+    @Test
+    public void testSearchCountedInCompilationStats() throws IOException {
+        buildScriptService(Settings.EMPTY);
+        scriptService.search(null, new Script("1+1", ScriptType.INLINE, "test", null), randomFrom(scriptContexts));
+        assertEquals(1L, scriptService.stats().getCompilations());
+    }
+
+    @Test
+    public void testMultipleCompilationsCountedInCompilationStats() throws IOException {
+        buildScriptService(Settings.EMPTY);
+        int numberOfCompilations = randomIntBetween(1, 1024);
+        for (int i = 0; i < numberOfCompilations; i++) {
+            scriptService.compile(new Script(i + " + " + i, ScriptType.INLINE, "test", null), randomFrom(scriptContexts));
+        }
+        assertEquals(numberOfCompilations, scriptService.stats().getCompilations());
+    }
+
+    @Test
+    public void testCompilationStatsOnCacheHit() throws IOException {
+        Settings.Builder builder = Settings.builder();
+        builder.put(ScriptService.SCRIPT_CACHE_SIZE_SETTING, 1);
+        buildScriptService(builder.build());
+        scriptService.executable(new Script("1+1", ScriptType.INLINE, "test", null), randomFrom(scriptContexts));
+        scriptService.executable(new Script("1+1", ScriptType.INLINE, "test", null), randomFrom(scriptContexts));
+        assertEquals(1L, scriptService.stats().getCompilations());
+    }
+
+    @Test
+    public void testFileScriptCountedInCompilationStats() throws IOException {
+        buildScriptService(Settings.EMPTY);
+        createFileScripts("test");
+        scriptService.compile(new Script("file_script", ScriptType.FILE, "test", null), randomFrom(scriptContexts));
+        assertEquals(1L, scriptService.stats().getCompilations());
+    }
+
+    @Test
+    public void testIndexedScriptCountedInCompilationStats() throws IOException {
+        buildScriptService(Settings.EMPTY);
+        scriptService.compile(new Script("script", ScriptType.INDEXED, "test", null), randomFrom(scriptContexts));
+        assertEquals(1L, scriptService.stats().getCompilations());
+    }
+
+    @Test
+    public void testCacheEvictionCountedInCacheEvictionsStats() throws IOException {
+        Settings.Builder builder = Settings.builder();
+        builder.put(ScriptService.SCRIPT_CACHE_SIZE_SETTING, 1);
+        buildScriptService(builder.build());
+        scriptService.executable(new Script("1+1", ScriptType.INLINE, "test", null), randomFrom(scriptContexts));
+        scriptService.executable(new Script("2+2", ScriptType.INLINE, "test", null), randomFrom(scriptContexts));
+        assertEquals(2L, scriptService.stats().getCompilations());
+        assertEquals(1L, scriptService.stats().getCacheEvictions());
     }
 
     private void createFileScripts(String... langs) throws IOException {

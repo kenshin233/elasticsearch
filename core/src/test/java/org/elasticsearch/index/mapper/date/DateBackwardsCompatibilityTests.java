@@ -19,7 +19,6 @@
 
 package org.elasticsearch.index.mapper.date;
 
-import com.google.common.collect.Lists;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.action.search.SearchResponse;
@@ -30,9 +29,10 @@ import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
-import org.elasticsearch.test.ElasticsearchSingleNodeTest;
+import org.elasticsearch.test.ESSingleNodeTestCase;
 import org.junit.Before;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.elasticsearch.common.settings.Settings.settingsBuilder;
@@ -46,7 +46,7 @@ import static org.hamcrest.Matchers.is;
  * Test class to check for all the conditions defined in
  * https://github.com/elastic/elasticsearch/issues/10971
  */
-public class DateBackwardsCompatibilityTests extends ElasticsearchSingleNodeTest {
+public class DateBackwardsCompatibilityTests extends ESSingleNodeTestCase {
 
     private String index = "testindex";
     private String type = "testtype";
@@ -84,7 +84,7 @@ public class DateBackwardsCompatibilityTests extends ElasticsearchSingleNodeTest
 
     public void testThatPre2xSupportsUnixTimestampsInAnyDateFormat() throws Exception {
         long dateInMillis = 1435073872l * 1000; // Tue Jun 23 17:37:52 CEST 2015
-        List<String> dateFormats = Lists.newArrayList("dateOptionalTime", "weekDate", "tTime", "ordinalDate", "hourMinuteSecond", "hourMinute");
+        List<String> dateFormats = Arrays.asList("dateOptionalTime", "weekDate", "tTime", "ordinalDate", "hourMinuteSecond", "hourMinute");
 
         for (String format : dateFormats) {
             XContentBuilder mapping = jsonBuilder().startObject().startObject("properties")

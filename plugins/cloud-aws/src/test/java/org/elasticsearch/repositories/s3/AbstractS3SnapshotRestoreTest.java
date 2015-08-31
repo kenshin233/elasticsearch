@@ -34,19 +34,20 @@ import org.elasticsearch.cloud.aws.AwsS3Service;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.plugin.cloud.aws.CloudAwsPlugin;
-import org.elasticsearch.plugins.PluginsService;
+import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.repositories.RepositoryMissingException;
 import org.elasticsearch.repositories.RepositoryVerificationException;
 import org.elasticsearch.snapshots.SnapshotMissingException;
 import org.elasticsearch.snapshots.SnapshotState;
-import org.elasticsearch.test.ElasticsearchIntegrationTest.ClusterScope;
-import org.elasticsearch.test.ElasticsearchIntegrationTest.Scope;
+import org.elasticsearch.test.ESIntegTestCase.ClusterScope;
+import org.elasticsearch.test.ESIntegTestCase.Scope;
 import org.elasticsearch.test.store.MockFSDirectoryService;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 import static org.hamcrest.Matchers.*;
@@ -64,8 +65,13 @@ abstract public class AbstractS3SnapshotRestoreTest extends AbstractAwsTest {
                 .put(MockFSDirectoryService.RANDOM_PREVENT_DOUBLE_WRITE, false)
                 .put(MockFSDirectoryService.RANDOM_NO_DELETE_OPEN_FILE, false)
                 .put("cloud.enabled", true)
-                .put("plugin.types", CloudAwsPlugin.class.getName())
+                .put("repositories.s3.base_path", basePath)
                 .build();
+    }
+
+    @Override
+    protected Collection<Class<? extends Plugin>> nodePlugins() {
+        return pluginList(CloudAwsPlugin.class);
     }
 
     private String basePath;
@@ -86,11 +92,17 @@ abstract public class AbstractS3SnapshotRestoreTest extends AbstractAwsTest {
     @Test @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch-cloud-aws/issues/211")
     public void testSimpleWorkflow() {
         Client client = client();
+        Settings.Builder settings = Settings.settingsBuilder()
+                .put("chunk_size", randomIntBetween(1000, 10000));
+
+        // We sometime test getting the base_path from node settings using repositories.s3.base_path
+        if (usually()) {
+            settings.put("base_path", basePath);
+        }
+
         logger.info("-->  creating s3 repository with bucket[{}] and path [{}]", internalCluster().getInstance(Settings.class).get("repositories.s3.bucket"), basePath);
         PutRepositoryResponse putRepositoryResponse = client.admin().cluster().preparePutRepository("test-repo")
-                .setType("s3").setSettings(Settings.settingsBuilder()
-                        .put("base_path", basePath)
-                        .put("chunk_size", randomIntBetween(1000, 10000))
+                .setType("s3").setSettings(settings
                         ).get();
         assertThat(putRepositoryResponse.isAcknowledged(), equalTo(true));
 
@@ -343,7 +355,7 @@ abstract public class AbstractS3SnapshotRestoreTest extends AbstractAwsTest {
         PutRepositoryResponse putRepositoryResponse = client.admin().cluster().preparePutRepository("test-repo")
                 .setType("s3").setSettings(Settings.settingsBuilder()
                         .put("base_path", basePath)
-                        ).get();
+                ).get();
         assertThat(putRepositoryResponse.isAcknowledged(), equalTo(true));
 
         logger.info("--> restore non existing snapshot");

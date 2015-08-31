@@ -19,7 +19,6 @@
 package org.elasticsearch.cluster.metadata;
 
 import com.carrotsearch.hppc.cursors.ObjectCursor;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import org.elasticsearch.action.admin.indices.alias.Alias;
@@ -29,6 +28,7 @@ import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.TimeoutClusterStateUpdateTask;
 import org.elasticsearch.common.Priority;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.ValidationException;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.regex.Regex;
@@ -38,6 +38,7 @@ import org.elasticsearch.indices.IndexTemplateAlreadyExistsException;
 import org.elasticsearch.indices.IndexTemplateMissingException;
 import org.elasticsearch.indices.InvalidIndexTemplateException;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -50,12 +51,14 @@ public class MetaDataIndexTemplateService extends AbstractComponent {
 
     private final ClusterService clusterService;
     private final AliasValidator aliasValidator;
+    private final MetaDataCreateIndexService metaDataCreateIndexService;
 
     @Inject
-    public MetaDataIndexTemplateService(Settings settings, ClusterService clusterService, AliasValidator aliasValidator) {
+    public MetaDataIndexTemplateService(Settings settings, ClusterService clusterService, MetaDataCreateIndexService metaDataCreateIndexService, AliasValidator aliasValidator) {
         super(settings);
         this.clusterService = clusterService;
         this.aliasValidator = aliasValidator;
+        this.metaDataCreateIndexService = metaDataCreateIndexService;
     }
 
     public void removeTemplates(final RemoveRequest request, final RemoveListener listener) {
@@ -176,35 +179,44 @@ public class MetaDataIndexTemplateService extends AbstractComponent {
     }
 
     private void validate(PutRequest request) {
+        List<String> validationErrors = new ArrayList<>();
         if (request.name.contains(" ")) {
-            throw new InvalidIndexTemplateException(request.name, "name must not contain a space");
+            validationErrors.add("name must not contain a space");
         }
         if (request.name.contains(",")) {
-            throw new InvalidIndexTemplateException(request.name, "name must not contain a ','");
+            validationErrors.add("name must not contain a ','");
         }
         if (request.name.contains("#")) {
-            throw new InvalidIndexTemplateException(request.name, "name must not contain a '#'");
+            validationErrors.add("name must not contain a '#'");
         }
         if (request.name.startsWith("_")) {
-            throw new InvalidIndexTemplateException(request.name, "name must not start with '_'");
+            validationErrors.add("name must not start with '_'");
         }
         if (!request.name.toLowerCase(Locale.ROOT).equals(request.name)) {
-            throw new InvalidIndexTemplateException(request.name, "name must be lower cased");
+            validationErrors.add("name must be lower cased");
         }
         if (request.template.contains(" ")) {
-            throw new InvalidIndexTemplateException(request.name, "template must not contain a space");
+            validationErrors.add("template must not contain a space");
         }
         if (request.template.contains(",")) {
-            throw new InvalidIndexTemplateException(request.name, "template must not contain a ','");
+            validationErrors.add("template must not contain a ','");
         }
         if (request.template.contains("#")) {
-            throw new InvalidIndexTemplateException(request.name, "template must not contain a '#'");
+            validationErrors.add("template must not contain a '#'");
         }
         if (request.template.startsWith("_")) {
-            throw new InvalidIndexTemplateException(request.name, "template must not start with '_'");
+            validationErrors.add("template must not start with '_'");
         }
         if (!Strings.validFileNameExcludingAstrix(request.template)) {
-            throw new InvalidIndexTemplateException(request.name, "template must not container the following characters " + Strings.INVALID_FILENAME_CHARS);
+            validationErrors.add("template must not container the following characters " + Strings.INVALID_FILENAME_CHARS);
+        }
+
+        List<String> indexSettingsValidation = metaDataCreateIndexService.getIndexSettingsValidationErrors(request.settings);
+        validationErrors.addAll(indexSettingsValidation);
+        if (!validationErrors.isEmpty()) {
+            ValidationException validationException = new ValidationException();
+            validationException.addValidationErrors(validationErrors);
+            throw new InvalidIndexTemplateException(request.name, validationException.getMessage());
         }
 
         for (Alias alias : request.aliases) {
@@ -228,7 +240,7 @@ public class MetaDataIndexTemplateService extends AbstractComponent {
         String template;
         Settings settings = Settings.Builder.EMPTY_SETTINGS;
         Map<String, String> mappings = Maps.newHashMap();
-        List<Alias> aliases = Lists.newArrayList();
+        List<Alias> aliases = new ArrayList<>();
         Map<String, IndexMetaData.Custom> customs = Maps.newHashMap();
 
         TimeValue masterTimeout = MasterNodeRequest.DEFAULT_MASTER_NODE_TIMEOUT;
@@ -262,7 +274,7 @@ public class MetaDataIndexTemplateService extends AbstractComponent {
             this.mappings.putAll(mappings);
             return this;
         }
-        
+
         public PutRequest aliases(Set<Alias> aliases) {
             this.aliases.addAll(aliases);
             return this;

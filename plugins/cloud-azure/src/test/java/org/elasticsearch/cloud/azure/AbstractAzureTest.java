@@ -20,12 +20,15 @@
 package org.elasticsearch.cloud.azure;
 
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.io.PathUtils;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.env.Environment;
-import org.elasticsearch.env.FailedToResolveConfigException;
+import org.elasticsearch.common.settings.SettingsException;
 import org.elasticsearch.plugin.cloud.azure.CloudAzurePlugin;
-import org.elasticsearch.test.ElasticsearchIntegrationTest;
-import org.elasticsearch.test.ElasticsearchIntegrationTest.ThirdParty;
+import org.elasticsearch.plugins.Plugin;
+import org.elasticsearch.test.ESIntegTestCase;
+import org.elasticsearch.test.ESIntegTestCase.ThirdParty;
+
+import java.util.Collection;
 
 /**
  * Base class for Azure tests that require credentials.
@@ -34,30 +37,33 @@ import org.elasticsearch.test.ElasticsearchIntegrationTest.ThirdParty;
  * in order to run these tests.
  */
 @ThirdParty
-public abstract class AbstractAzureTest extends ElasticsearchIntegrationTest {
+public abstract class AbstractAzureTest extends ESIntegTestCase {
 
     @Override
     protected Settings nodeSettings(int nodeOrdinal) {
         return Settings.builder()
                 .put(super.nodeSettings(nodeOrdinal))
-                .put("plugin.types", CloudAzurePlugin.class.getName())
                 .put(readSettingsFromFile())
                 .build();
+    }
+
+    @Override
+    protected Collection<Class<? extends Plugin>> nodePlugins() {
+        return pluginList(CloudAzurePlugin.class);
     }
 
     protected Settings readSettingsFromFile() {
         Settings.Builder settings = Settings.builder();
         settings.put("path.home", createTempDir());
-        Environment environment = new Environment(settings.build());
 
         // if explicit, just load it and don't load from env
         try {
             if (Strings.hasText(System.getProperty("tests.config"))) {
-                settings.loadFromUrl(environment.resolveConfig(System.getProperty("tests.config")));
+                settings.loadFromPath(PathUtils.get((System.getProperty("tests.config"))));
             } else {
                 throw new IllegalStateException("to run integration tests, you need to set -Dtests.thirdparty=true and -Dtests.config=/path/to/elasticsearch.yml");
             }
-        } catch (FailedToResolveConfigException exception) {
+        } catch (SettingsException exception) {
           throw new IllegalStateException("your test configuration file is incorrect: " + System.getProperty("tests.config"), exception);
         }
         return settings.build();

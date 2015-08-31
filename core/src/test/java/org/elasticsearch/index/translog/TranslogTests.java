@@ -29,7 +29,7 @@ import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.TestUtil;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.Version;
-import org.elasticsearch.bwcompat.OldIndexBackwardsCompatibilityTests;
+import org.elasticsearch.bwcompat.OldIndexBackwardsCompatibilityIT;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.io.FileSystemUtils;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
@@ -41,7 +41,7 @@ import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.VersionType;
 import org.elasticsearch.index.shard.ShardId;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.hamcrest.Matchers;
 import org.junit.After;
 import org.junit.Before;
@@ -53,9 +53,25 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
-import java.nio.file.*;
-import java.util.*;
-import java.util.concurrent.*;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -63,14 +79,13 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static com.google.common.collect.Lists.newArrayList;
 import static org.hamcrest.Matchers.*;
 
 /**
  *
  */
 @LuceneTestCase.SuppressFileSystems("ExtrasFS")
-public class TranslogTests extends ElasticsearchTestCase {
+public class TranslogTests extends ESTestCase {
 
     private static final Pattern PARSE_LEGACY_ID_PATTERN = Pattern.compile("^" + Translog.TRANSLOG_FILE_PREFIX + "(\\d+)((\\.recovering))?$");
 
@@ -546,7 +561,7 @@ public class TranslogTests extends ElasticsearchTestCase {
 
     @Test
     public void testTranslogChecksums() throws Exception {
-        List<Translog.Location> locations = newArrayList();
+        List<Translog.Location> locations = new ArrayList<>();
 
         int translogOperations = randomIntBetween(10, 100);
         for (int op = 0; op < translogOperations; op++) {
@@ -570,7 +585,7 @@ public class TranslogTests extends ElasticsearchTestCase {
 
     @Test
     public void testTruncatedTranslogs() throws Exception {
-        List<Translog.Location> locations = newArrayList();
+        List<Translog.Location> locations = new ArrayList<>();
 
         int translogOperations = randomIntBetween(10, 100);
         for (int op = 0; op < translogOperations; op++) {
@@ -855,7 +870,7 @@ public class TranslogTests extends ElasticsearchTestCase {
     }
 
     public void testLocationComparison() throws IOException {
-        List<Translog.Location> locations = newArrayList();
+        List<Translog.Location> locations = new ArrayList<>();
         int translogOperations = randomIntBetween(10, 100);
         int count = 0;
         for (int op = 0; op < translogOperations; op++) {
@@ -884,7 +899,7 @@ public class TranslogTests extends ElasticsearchTestCase {
 
 
     public void testBasicCheckpoint() throws IOException {
-        List<Translog.Location> locations = newArrayList();
+        List<Translog.Location> locations = new ArrayList<>();
         int translogOperations = randomIntBetween(10, 100);
         int lastSynced = -1;
         for (int op = 0; op < translogOperations; op++) {
@@ -970,7 +985,7 @@ public class TranslogTests extends ElasticsearchTestCase {
     }
 
     public void testBasicRecovery() throws IOException {
-        List<Translog.Location> locations = newArrayList();
+        List<Translog.Location> locations = new ArrayList<>();
         int translogOperations = randomIntBetween(10, 100);
         Translog.TranslogGeneration translogGeneration = null;
         int minUncommittedOp = -1;
@@ -1012,7 +1027,7 @@ public class TranslogTests extends ElasticsearchTestCase {
     }
 
     public void testRecoveryUncommitted() throws IOException {
-        List<Translog.Location> locations = newArrayList();
+        List<Translog.Location> locations = new ArrayList<>();
         int translogOperations = randomIntBetween(10, 100);
         final int prepareOp = randomIntBetween(0, translogOperations-1);
         Translog.TranslogGeneration translogGeneration = null;
@@ -1066,7 +1081,7 @@ public class TranslogTests extends ElasticsearchTestCase {
 
     public void testSnapshotFromStreamInput() throws IOException {
         BytesStreamOutput out = new BytesStreamOutput();
-        List<Translog.Operation> ops = newArrayList();
+        List<Translog.Operation> ops = new ArrayList<>();
         int translogOperations = randomIntBetween(10, 100);
         for (int op = 0; op < translogOperations; op++) {
             Translog.Create test = new Translog.Create("test", "" + op, Integer.toString(op).getBytes(Charset.forName("UTF-8")));
@@ -1079,8 +1094,8 @@ public class TranslogTests extends ElasticsearchTestCase {
     }
 
     public void testLocationHashCodeEquals() throws IOException {
-        List<Translog.Location> locations = newArrayList();
-        List<Translog.Location> locations2 = newArrayList();
+        List<Translog.Location> locations = new ArrayList<>();
+        List<Translog.Location> locations2 = new ArrayList<>();
         int translogOperations = randomIntBetween(10, 100);
         try(Translog translog2 = create(createTempDir())) {
             for (int op = 0; op < translogOperations; op++) {
@@ -1107,7 +1122,7 @@ public class TranslogTests extends ElasticsearchTestCase {
     }
 
     public void testOpenForeignTranslog() throws IOException {
-        List<Translog.Location> locations = newArrayList();
+        List<Translog.Location> locations = new ArrayList<>();
         int translogOperations = randomIntBetween(1, 10);
         int firstUncommitted = 0;
         for (int op = 0; op < translogOperations; op++) {
@@ -1142,7 +1157,7 @@ public class TranslogTests extends ElasticsearchTestCase {
 
     public void testUpgradeOldTranslogFiles() throws IOException {
         List<Path> indexes = new ArrayList<>();
-        Path dir = getDataPath("/" + OldIndexBackwardsCompatibilityTests.class.getPackage().getName().replace('.', '/')); // the files are in the same pkg as the OldIndexBackwardsCompatibilityTests test
+        Path dir = getDataPath("/" + OldIndexBackwardsCompatibilityIT.class.getPackage().getName().replace('.', '/')); // the files are in the same pkg as the OldIndexBackwardsCompatibilityTests test
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, "index-*.zip")) {
             for (Path path : stream) {
                 indexes.add(path);

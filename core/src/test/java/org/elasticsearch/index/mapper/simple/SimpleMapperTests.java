@@ -27,18 +27,18 @@ import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.index.mapper.*;
 import org.elasticsearch.index.mapper.ParseContext.Document;
 import org.elasticsearch.index.IndexService;
-import org.elasticsearch.test.ElasticsearchSingleNodeTest;
+import org.elasticsearch.test.ESSingleNodeTestCase;
 import org.junit.Test;
 
-import static org.elasticsearch.common.io.Streams.copyToBytesFromClasspath;
-import static org.elasticsearch.common.io.Streams.copyToStringFromClasspath;
+import static org.elasticsearch.test.StreamsUtils.copyToBytesFromClasspath;
+import static org.elasticsearch.test.StreamsUtils.copyToStringFromClasspath;
 import static org.elasticsearch.index.mapper.MapperBuilders.*;
 import static org.hamcrest.Matchers.equalTo;
 
 /**
  *
  */
-public class SimpleMapperTests extends ElasticsearchSingleNodeTest {
+public class SimpleMapperTests extends ESSingleNodeTestCase {
 
     @Test
     public void testSimpleMapper() throws Exception {

@@ -21,11 +21,17 @@ package org.elasticsearch.common.io;
 
 import com.google.common.base.Charsets;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.Lists;
-import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.util.Callback;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.Reader;
+import java.io.StringWriter;
+import java.io.Writer;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -184,34 +190,6 @@ public abstract class Streams {
         return out.toString();
     }
 
-    public static String copyToStringFromClasspath(ClassLoader classLoader, String path) throws IOException {
-        InputStream is = classLoader.getResourceAsStream(path);
-        if (is == null) {
-            throw new FileNotFoundException("Resource [" + path + "] not found in classpath with class loader [" + classLoader + "]");
-        }
-        return copyToString(new InputStreamReader(is, Charsets.UTF_8));
-    }
-
-    public static String copyToStringFromClasspath(String path) throws IOException {
-        InputStream is = Streams.class.getResourceAsStream(path);
-        if (is == null) {
-            throw new FileNotFoundException("Resource [" + path + "] not found in classpath");
-        }
-        return copyToString(new InputStreamReader(is, Charsets.UTF_8));
-    }
-
-    public static byte[] copyToBytesFromClasspath(String path) throws IOException {
-        try (InputStream is = Streams.class.getResourceAsStream(path)) {
-            if (is == null) {
-                throw new FileNotFoundException("Resource [" + path + "] not found in classpath");
-            }
-            try (BytesStreamOutput out = new BytesStreamOutput()) {
-                copy(is, out);
-                return out.bytes().toBytes();
-            }
-        }
-    }
-
     public static int readFully(Reader reader, char[] dest) throws IOException {
         return readFully(reader, dest, 0, dest.length);
     }
@@ -245,7 +223,7 @@ public abstract class Streams {
     }
 
     public static List<String> readAllLines(InputStream input) throws IOException {
-        final List<String> lines = Lists.newArrayList();
+        final List<String> lines = new ArrayList<>();
         readAllLines(input, new Callback<String>() {
             @Override
             public void handle(String line) {

@@ -19,14 +19,14 @@
 
 package org.elasticsearch.cluster.routing;
 
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.junit.Test;
 
 import static org.hamcrest.Matchers.*;
 
 /**
  */
-public class AllocationIdTests extends ElasticsearchTestCase {
+public class AllocationIdTests extends ESTestCase {
 
     @Test
     public void testShardToStarted() {
@@ -35,7 +35,7 @@ public class AllocationIdTests extends ElasticsearchTestCase {
         assertThat(shard.allocationId(), nullValue());
 
         logger.info("-- initialize the shard");
-        shard.initialize("node1");
+        shard.initialize("node1", -1);
         AllocationId allocationId = shard.allocationId();
         assertThat(allocationId, notNullValue());
         assertThat(allocationId.getId(), notNullValue());
@@ -53,12 +53,12 @@ public class AllocationIdTests extends ElasticsearchTestCase {
     public void testSuccessfulRelocation() {
         logger.info("-- build started shard");
         ShardRouting shard = ShardRouting.newUnassigned("test", 0, null, true, new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, null));
-        shard.initialize("node1");
+        shard.initialize("node1", -1);
         shard.moveToStarted();
 
         AllocationId allocationId = shard.allocationId();
         logger.info("-- relocate the shard");
-        shard.relocate("node2");
+        shard.relocate("node2", -1);
         assertThat(shard.allocationId(), not(equalTo(allocationId)));
         assertThat(shard.allocationId().getId(), equalTo(allocationId.getId()));
         assertThat(shard.allocationId().getRelocationId(), notNullValue());
@@ -77,12 +77,12 @@ public class AllocationIdTests extends ElasticsearchTestCase {
     public void testCancelRelocation() {
         logger.info("-- build started shard");
         ShardRouting shard = ShardRouting.newUnassigned("test", 0, null, true, new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, null));
-        shard.initialize("node1");
+        shard.initialize("node1", -1);
         shard.moveToStarted();
 
         AllocationId allocationId = shard.allocationId();
         logger.info("-- relocate the shard");
-        shard.relocate("node2");
+        shard.relocate("node2", -1);
         assertThat(shard.allocationId(), not(equalTo(allocationId)));
         assertThat(shard.allocationId().getId(), equalTo(allocationId.getId()));
         assertThat(shard.allocationId().getRelocationId(), notNullValue());
@@ -98,7 +98,7 @@ public class AllocationIdTests extends ElasticsearchTestCase {
     public void testMoveToUnassigned() {
         logger.info("-- build started shard");
         ShardRouting shard = ShardRouting.newUnassigned("test", 0, null, true, new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, null));
-        shard.initialize("node1");
+        shard.initialize("node1", -1);
         shard.moveToStarted();
 
         logger.info("-- move to unassigned");
@@ -110,7 +110,7 @@ public class AllocationIdTests extends ElasticsearchTestCase {
     public void testReinitializing() {
         logger.info("-- build started shard");
         ShardRouting shard = ShardRouting.newUnassigned("test", 0, null, true, new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, null));
-        shard.initialize("node1");
+        shard.initialize("node1", -1);
         shard.moveToStarted();
         AllocationId allocationId = shard.allocationId();
 

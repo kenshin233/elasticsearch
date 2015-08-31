@@ -19,9 +19,9 @@
 
 package org.elasticsearch.test.rest.support;
 
-import com.google.common.collect.Lists;
-import org.elasticsearch.test.ElasticsearchIntegrationTest;
+import org.elasticsearch.test.ESIntegTestCase;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -34,7 +34,7 @@ import java.util.List;
  */
 public final class Features {
 
-    private static final List<String> SUPPORTED = Lists.newArrayList("stash_in_path", "groovy_scripting");
+    private static final List<String> SUPPORTED = Arrays.asList("stash_in_path", "groovy_scripting");
 
     private Features() {
 
@@ -45,7 +45,7 @@ public final class Features {
      */
     public static boolean areAllSupported(List<String> features) {
         for (String feature : features) {
-            if ("requires_replica".equals(feature) && ElasticsearchIntegrationTest.cluster().numDataNodes() >= 2) {
+            if ("requires_replica".equals(feature) && ESIntegTestCase.cluster().numDataNodes() >= 2) {
                 continue;
             }
             if (!SUPPORTED.contains(feature)) {

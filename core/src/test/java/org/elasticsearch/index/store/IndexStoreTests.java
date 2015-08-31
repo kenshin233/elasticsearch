@@ -24,21 +24,22 @@ import org.apache.lucene.util.Constants;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.shard.ShardPath;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Locale;
 
 /**
  */
-public class IndexStoreTests extends ElasticsearchTestCase {
+public class IndexStoreTests extends ESTestCase {
 
     public void testStoreDirectory() throws IOException {
-        final Path tempDir = createTempDir();
+        final Path tempDir = createTempDir().resolve("foo").resolve("0");
         final IndexStoreModule.Type[] values = IndexStoreModule.Type.values();
         final IndexStoreModule.Type type = RandomPicks.randomFrom(random(), values);
-        Settings settings = Settings.settingsBuilder().put(IndexStoreModule.STORE_TYPE, type.name()).build();
-        FsDirectoryService service = new FsDirectoryService(settings, null, new ShardPath(tempDir, tempDir, "foo", new ShardId("foo", 0)));
+        Settings settings = Settings.settingsBuilder().put(IndexStoreModule.STORE_TYPE, type.name().toLowerCase(Locale.ROOT)).build();
+        FsDirectoryService service = new FsDirectoryService(settings, null, new ShardPath(false, tempDir, tempDir, "foo", new ShardId("foo", 0)));
         try (final Directory directory = service.newFSDirectory(tempDir, NoLockFactory.INSTANCE)) {
             switch (type) {
                 case NIOFS:
@@ -69,9 +70,9 @@ public class IndexStoreTests extends ElasticsearchTestCase {
     }
 
     public void testStoreDirectoryDefault() throws IOException {
-        final Path tempDir = createTempDir();
+        final Path tempDir = createTempDir().resolve("foo").resolve("0");
         Settings settings = Settings.EMPTY;
-        FsDirectoryService service = new FsDirectoryService(settings, null, new ShardPath(tempDir, tempDir, "foo", new ShardId("foo", 0)));
+        FsDirectoryService service = new FsDirectoryService(settings, null, new ShardPath(false, tempDir, tempDir, "foo", new ShardId("foo", 0)));
         try (final Directory directory = service.newFSDirectory(tempDir, NoLockFactory.INSTANCE)) {
             if (Constants.WINDOWS) {
                 assertTrue(directory.toString(), directory instanceof MMapDirectory || directory instanceof SimpleFSDirectory);
@@ -80,6 +81,4 @@ public class IndexStoreTests extends ElasticsearchTestCase {
             }
         }
     }
-
-
 }

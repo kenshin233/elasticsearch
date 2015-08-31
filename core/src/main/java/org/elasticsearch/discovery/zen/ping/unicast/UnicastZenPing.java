@@ -20,7 +20,6 @@
 package org.elasticsearch.discovery.zen.ping.unicast;
 
 import com.carrotsearch.hppc.cursors.ObjectCursor;
-import com.google.common.collect.Lists;
 import org.apache.lucene.util.IOUtils;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.Version;
@@ -29,11 +28,13 @@ import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.component.AbstractLifecycleComponent;
+import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.TransportAddress;
 import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.util.CollectionUtils;
 import org.elasticsearch.common.util.concurrent.AbstractRunnable;
 import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
@@ -42,17 +43,36 @@ import org.elasticsearch.discovery.zen.elect.ElectMasterService;
 import org.elasticsearch.discovery.zen.ping.PingContextProvider;
 import org.elasticsearch.discovery.zen.ping.ZenPing;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.transport.*;
+import org.elasticsearch.transport.BaseTransportResponseHandler;
+import org.elasticsearch.transport.ConnectTransportException;
+import org.elasticsearch.transport.RemoteTransportException;
+import org.elasticsearch.transport.TransportChannel;
+import org.elasticsearch.transport.TransportException;
+import org.elasticsearch.transport.TransportRequest;
+import org.elasticsearch.transport.TransportRequestHandler;
+import org.elasticsearch.transport.TransportRequestOptions;
+import org.elasticsearch.transport.TransportResponse;
+import org.elasticsearch.transport.TransportService;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static com.google.common.collect.Lists.newArrayList;
 import static org.elasticsearch.common.unit.TimeValue.readTimeValue;
 import static org.elasticsearch.common.util.concurrent.ConcurrentCollections.newConcurrentMap;
 import static org.elasticsearch.discovery.zen.ping.ZenPing.PingResponse.readPingResponse;
@@ -63,8 +83,12 @@ import static org.elasticsearch.discovery.zen.ping.ZenPing.PingResponse.readPing
 public class UnicastZenPing extends AbstractLifecycleComponent<ZenPing> implements ZenPing {
 
     public static final String ACTION_NAME = "internal:discovery/zen/unicast";
+    public static final String DISCOVERY_ZEN_PING_UNICAST_HOSTS = "discovery.zen.ping.unicast.hosts";
 
-    public static final int LIMIT_PORTS_COUNT = 1;
+    // these limits are per-address
+    public static final int LIMIT_FOREIGN_PORTS_COUNT = 1;
+    public static final int LIMIT_LOCAL_PORTS_COUNT = 5;
+
 
     private final ThreadPool threadPool;
     private final TransportService transportService;
@@ -96,6 +120,7 @@ public class UnicastZenPing extends AbstractLifecycleComponent<ZenPing> implemen
 
     private volatile boolean closed = false;
 
+    @Inject
     public UnicastZenPing(Settings settings, ThreadPool threadPool, TransportService transportService, ClusterName clusterName,
                           Version version, ElectMasterService electMasterService, @Nullable Set<UnicastHostsProvider> unicastHostsProviders) {
         super(settings);
@@ -111,21 +136,30 @@ public class UnicastZenPing extends AbstractLifecycleComponent<ZenPing> implemen
         }
 
         this.concurrentConnects = this.settings.getAsInt("discovery.zen.ping.unicast.concurrent_connects", 10);
-        String[] hostArr = this.settings.getAsArray("discovery.zen.ping.unicast.hosts");
+        String[] hostArr = this.settings.getAsArray(DISCOVERY_ZEN_PING_UNICAST_HOSTS);
         // trim the hosts
         for (int i = 0; i < hostArr.length; i++) {
             hostArr[i] = hostArr[i].trim();
         }
-        List<String> hosts = Lists.newArrayList(hostArr);
+        List<String> hosts = CollectionUtils.arrayAsArrayList(hostArr);
+        final int limitPortCounts;
+        if (hosts.isEmpty()) {
+            // if unicast hosts are not specified, fill with simple defaults on the local machine
+            limitPortCounts = LIMIT_LOCAL_PORTS_COUNT;
+            hosts.addAll(transportService.getLocalAddresses());
+        } else {
+            // we only limit to 1 addresses, makes no sense to ping 100 ports
+            limitPortCounts = LIMIT_FOREIGN_PORTS_COUNT;
+        }
+
         logger.debug("using initial hosts {}, with concurrent_connects [{}]", hosts, concurrentConnects);
 
-        List<DiscoveryNode> configuredTargetNodes = Lists.newArrayList();
+        List<DiscoveryNode> configuredTargetNodes = new ArrayList<>();
         for (String host : hosts) {
             try {
-                TransportAddress[] addresses = transportService.addressesFromString(host);
-                // we only limit to 1 addresses, makes no sense to ping 100 ports
-                for (int i = 0; (i < addresses.length && i < LIMIT_PORTS_COUNT); i++) {
-                    configuredTargetNodes.add(new DiscoveryNode(UNICAST_NODE_PREFIX + unicastNodeIdGenerator.incrementAndGet() + "#", addresses[i], version.minimumCompatibilityVersion()));
+                TransportAddress[] addresses = transportService.addressesFromString(host, limitPortCounts);
+                for (TransportAddress address : addresses) {
+                    configuredTargetNodes.add(new DiscoveryNode(UNICAST_NODE_PREFIX + unicastNodeIdGenerator.incrementAndGet() + "#", address, version.minimumCompatibilityVersion()));
                 }
             } catch (Exception e) {
                 throw new IllegalArgumentException("Failed to resolve address for [" + host + "]", e);
@@ -136,7 +170,7 @@ public class UnicastZenPing extends AbstractLifecycleComponent<ZenPing> implemen
         transportService.registerRequestHandler(ACTION_NAME, UnicastPingRequest.class, ThreadPool.Names.SAME, new UnicastPingRequestHandler());
 
         ThreadFactory threadFactory = EsExecutors.daemonThreadFactory(settings, "[unicast_connect]");
-        unicastConnectExecutor = EsExecutors.newScaling(0, concurrentConnects, 60, TimeUnit.SECONDS, threadFactory);
+        unicastConnectExecutor = EsExecutors.newScaling("unicast_connect", 0, concurrentConnects, 60, TimeUnit.SECONDS, threadFactory);
     }
 
     @Override
@@ -310,7 +344,7 @@ public class UnicastZenPing extends AbstractLifecycleComponent<ZenPing> implemen
         List<DiscoveryNode> sortedNodesToPing = electMasterService.sortByMasterLikelihood(nodesToPingSet);
 
         // new add the the unicast targets first
-        ArrayList<DiscoveryNode> nodesToPing = Lists.newArrayList(configuredTargetNodes);
+        List<DiscoveryNode> nodesToPing = CollectionUtils.arrayAsArrayList(configuredTargetNodes);
         nodesToPing.addAll(sortedNodesToPing);
 
         final CountDownLatch latch = new CountDownLatch(nodesToPing.size());
@@ -470,7 +504,7 @@ public class UnicastZenPing extends AbstractLifecycleComponent<ZenPing> implemen
             }
         });
 
-        List<PingResponse> pingResponses = newArrayList(temporalResponses);
+        List<PingResponse> pingResponses = CollectionUtils.iterableAsArrayList(temporalResponses);
         pingResponses.add(createPingResponse(contextProvider.nodes()));
 
 

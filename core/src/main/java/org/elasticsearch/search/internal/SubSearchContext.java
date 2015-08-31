@@ -19,18 +19,13 @@
 package org.elasticsearch.search.internal;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
 import org.apache.lucene.search.Filter;
-import org.apache.lucene.search.Query;
-import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.util.Counter;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.index.query.ParsedQuery;
-import org.elasticsearch.search.Scroll;
 import org.elasticsearch.search.aggregations.SearchContextAggregations;
 import org.elasticsearch.search.fetch.FetchSearchResult;
-import org.elasticsearch.search.fetch.fielddata.FieldDataFieldsContext;
 import org.elasticsearch.search.fetch.innerhits.InnerHitsContext;
 import org.elasticsearch.search.fetch.script.ScriptFieldsContext;
 import org.elasticsearch.search.fetch.source.FetchSourceContext;
@@ -40,6 +35,7 @@ import org.elasticsearch.search.query.QuerySearchResult;
 import org.elasticsearch.search.rescore.RescoreSearchContext;
 import org.elasticsearch.search.suggest.SuggestionSearchContext;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -62,7 +58,6 @@ public class SubSearchContext extends FilteredSearchContext {
     private int docsIdsToLoadSize;
 
     private List<String> fieldNames;
-    private FieldDataFieldsContext fieldDataFields;
     private ScriptFieldsContext scriptFields;
     private FetchSourceContext fetchSourceContext;
     private SearchContextHighlight highlight;
@@ -103,7 +98,7 @@ public class SubSearchContext extends FilteredSearchContext {
     }
 
     @Override
-    public SearchContext scroll(Scroll scroll) {
+    public SearchContext scrollContext(ScrollContext scrollContext) {
         throw new UnsupportedOperationException("Not supported");
     }
 
@@ -130,19 +125,6 @@ public class SubSearchContext extends FilteredSearchContext {
     @Override
     public void addRescore(RescoreSearchContext rescore) {
         throw new UnsupportedOperationException("Not supported");
-    }
-
-    @Override
-    public boolean hasFieldDataFields() {
-        return fieldDataFields != null;
-    }
-
-    @Override
-    public FieldDataFieldsContext fieldDataFields() {
-        if (fieldDataFields == null) {
-            fieldDataFields = new FieldDataFieldsContext();
-        }
-        return this.fieldDataFields;
     }
 
     @Override
@@ -222,11 +204,6 @@ public class SubSearchContext extends FilteredSearchContext {
     }
 
     @Override
-    public SearchContext updateRewriteQuery(Query rewriteQuery) {
-        throw new UnsupportedOperationException("Not supported");
-    }
-
-    @Override
     public int from() {
         return from;
     }
@@ -256,7 +233,7 @@ public class SubSearchContext extends FilteredSearchContext {
     @Override
     public List<String> fieldNames() {
         if (fieldNames == null) {
-            fieldNames = Lists.newArrayList();
+            fieldNames = new ArrayList<>();
         }
         return fieldNames;
     }
@@ -321,11 +298,6 @@ public class SubSearchContext extends FilteredSearchContext {
 
     @Override
     public void keepAlive(long keepAlive) {
-        throw new UnsupportedOperationException("Not supported");
-    }
-
-    @Override
-    public void lastEmittedDoc(ScoreDoc doc) {
         throw new UnsupportedOperationException("Not supported");
     }
 

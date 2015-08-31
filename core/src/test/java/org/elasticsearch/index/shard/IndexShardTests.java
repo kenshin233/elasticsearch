@@ -20,18 +20,30 @@ package org.elasticsearch.index.shard;
 
 import org.apache.lucene.index.CorruptIndexException;
 import org.apache.lucene.store.LockObtainFailedException;
-import org.elasticsearch.ElasticsearchException;
+import org.apache.lucene.util.Constants;
+import org.apache.lucene.util.IOUtils;
 import org.elasticsearch.Version;
+import org.elasticsearch.action.admin.indices.stats.CommonStatsFlags;
 import org.elasticsearch.action.admin.indices.stats.IndexStats;
+import org.elasticsearch.action.admin.indices.stats.ShardStats;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.support.IndicesOptions;
+import org.elasticsearch.cluster.ClusterInfoService;
+import org.elasticsearch.cluster.ClusterService;
+import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.cluster.InternalClusterInfoService;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.cluster.routing.ShardRoutingState;
 import org.elasticsearch.cluster.routing.TestShardRouting;
 import org.elasticsearch.common.bytes.BytesArray;
-import org.elasticsearch.common.io.FileSystemUtils;
+import org.elasticsearch.common.io.stream.BytesStreamOutput;
+import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.common.xcontent.XContentFactory;
+import org.elasticsearch.env.Environment;
 import org.elasticsearch.env.NodeEnvironment;
 import org.elasticsearch.env.ShardLock;
 import org.elasticsearch.index.IndexService;
@@ -43,7 +55,7 @@ import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.index.translog.TranslogConfig;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.test.DummyShardLock;
-import org.elasticsearch.test.ElasticsearchSingleNodeTest;
+import org.elasticsearch.test.ESSingleNodeTestCase;
 import org.elasticsearch.test.VersionUtils;
 import org.junit.Test;
 
@@ -55,8 +67,12 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
-import static org.elasticsearch.cluster.metadata.IndexMetaData.*;
+import static org.elasticsearch.cluster.metadata.IndexMetaData.EMPTY_PARAMS;
+import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_NUMBER_OF_REPLICAS;
+import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_NUMBER_OF_SHARDS;
+import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_VERSION_CREATED;
 import static org.elasticsearch.common.settings.Settings.settingsBuilder;
+import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertHitCount;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoFailures;
@@ -65,7 +81,7 @@ import static org.hamcrest.Matchers.equalTo;
 /**
  * Simple unit-test IndexShard related operations.
  */
-public class IndexShardTests extends ElasticsearchSingleNodeTest {
+public class IndexShardTests extends ESSingleNodeTestCase {
 
     public void testFlushOnDeleteSetting() throws Exception {
         boolean initValue = randomBoolean();
@@ -304,7 +320,7 @@ public class IndexShardTests extends ElasticsearchSingleNodeTest {
         assertBusy(new Runnable() { // should be very very quick
             @Override
             public void run() {
-                IndexStats indexStats = client().admin().indices().prepareStats("test").get().getIndex("test");
+                IndexStats indexStats = client().admin().indices().prepareStats("test").clear().get().getIndex("test");
                 assertNotNull(indexStats.getShards()[0].getCommitStats().getUserData().get(Engine.SYNC_COMMIT_ID));
             }
         });
@@ -435,4 +451,137 @@ public class IndexShardTests extends ElasticsearchSingleNodeTest {
         response = client().prepareSearch("test").get();
         assertHitCount(response, 0l);
     }
+
+    public void testIndexDirIsDeletedWhenShardRemoved() throws Exception {
+        Environment env = getInstanceFromNode(Environment.class);
+        Path idxPath = env.sharedDataFile().resolve(randomAsciiOfLength(10));
+        logger.info("--> idxPath: [{}]", idxPath);
+        Settings idxSettings = Settings.builder()
+                .put(IndexMetaData.SETTING_DATA_PATH, idxPath)
+                .build();
+        createIndex("test", idxSettings);
+        ensureGreen("test");
+        client().prepareIndex("test", "bar", "1").setSource("{}").setRefresh(true).get();
+        SearchResponse response = client().prepareSearch("test").get();
+        assertHitCount(response, 1l);
+        client().admin().indices().prepareDelete("test").get();
+        assertPathHasBeenCleared(idxPath);
+    }
+
+    public void testExpectedShardSizeIsPresent() throws InterruptedException {
+        assertAcked(client().admin().indices().prepareCreate("test")
+                .setSettings(SETTING_NUMBER_OF_SHARDS, 1, SETTING_NUMBER_OF_REPLICAS, 0));
+        for (int i = 0; i < 50; i++) {
+            client().prepareIndex("test", "test").setSource("{}").get();
+        }
+        ensureGreen("test");
+        InternalClusterInfoService clusterInfoService = (InternalClusterInfoService) getInstanceFromNode(ClusterInfoService.class);
+        InternalClusterInfoService.ClusterInfoUpdateJob job = clusterInfoService.new ClusterInfoUpdateJob(false);
+        job.run();
+        ClusterState state = getInstanceFromNode(ClusterService.class).state();
+        Long test = clusterInfoService.getClusterInfo().getShardSize(state.getRoutingTable().index("test").getShards().get(0).primaryShard());
+        assertNotNull(test);
+        assertTrue(test > 0);
+    }
+
+    public void testIndexCanChangeCustomDataPath() throws Exception {
+        Environment env = getInstanceFromNode(Environment.class);
+        Path idxPath = env.sharedDataFile().resolve(randomAsciiOfLength(10));
+        final String INDEX = "idx";
+        Path startDir = idxPath.resolve("start-" + randomAsciiOfLength(10));
+        Path endDir = idxPath.resolve("end-" + randomAsciiOfLength(10));
+        logger.info("--> start dir: [{}]", startDir.toAbsolutePath().toString());
+        logger.info("-->   end dir: [{}]", endDir.toAbsolutePath().toString());
+        // temp dirs are automatically created, but the end dir is what
+        // startDir is going to be renamed as, so it needs to be deleted
+        // otherwise we get all sorts of errors about the directory
+        // already existing
+        IOUtils.rm(endDir);
+
+        Settings sb = Settings.builder()
+                .put(IndexMetaData.SETTING_DATA_PATH, startDir.toAbsolutePath().toString())
+                .build();
+        Settings sb2 = Settings.builder()
+                .put(IndexMetaData.SETTING_DATA_PATH, endDir.toAbsolutePath().toString())
+                .build();
+
+        logger.info("--> creating an index with data_path [{}]", startDir.toAbsolutePath().toString());
+        createIndex(INDEX, sb);
+        ensureGreen(INDEX);
+        client().prepareIndex(INDEX, "bar", "1").setSource("{}").setRefresh(true).get();
+
+        SearchResponse resp = client().prepareSearch(INDEX).setQuery(matchAllQuery()).get();
+        assertThat("found the hit", resp.getHits().getTotalHits(), equalTo(1L));
+
+        logger.info("--> closing the index [{}]", INDEX);
+        client().admin().indices().prepareClose(INDEX).get();
+        logger.info("--> index closed, re-opening...");
+        client().admin().indices().prepareOpen(INDEX).get();
+        logger.info("--> index re-opened");
+        ensureGreen(INDEX);
+
+        resp = client().prepareSearch(INDEX).setQuery(matchAllQuery()).get();
+        assertThat("found the hit", resp.getHits().getTotalHits(), equalTo(1L));
+
+        // Now, try closing and changing the settings
+
+        logger.info("--> closing the index [{}]", INDEX);
+        client().admin().indices().prepareClose(INDEX).get();
+
+        logger.info("--> moving data on disk [{}] to [{}]", startDir.getFileName(), endDir.getFileName());
+        assert Files.exists(endDir) == false : "end directory should not exist!";
+        Files.move(startDir, endDir, StandardCopyOption.REPLACE_EXISTING);
+
+        logger.info("--> updating settings...");
+        client().admin().indices().prepareUpdateSettings(INDEX)
+                .setSettings(sb2)
+                .setIndicesOptions(IndicesOptions.fromOptions(true, false, true, true))
+                .get();
+
+        assert Files.exists(startDir) == false : "start dir shouldn't exist";
+
+        logger.info("--> settings updated and files moved, re-opening index");
+        client().admin().indices().prepareOpen(INDEX).get();
+        logger.info("--> index re-opened");
+        ensureGreen(INDEX);
+
+        resp = client().prepareSearch(INDEX).setQuery(matchAllQuery()).get();
+        assertThat("found the hit", resp.getHits().getTotalHits(), equalTo(1L));
+
+        assertAcked(client().admin().indices().prepareDelete(INDEX));
+        assertPathHasBeenCleared(startDir.toAbsolutePath().toString());
+        assertPathHasBeenCleared(endDir.toAbsolutePath().toString());
+    }
+
+    public void testShardStats() throws IOException {
+        createIndex("test");
+        ensureGreen();
+        IndicesService indicesService = getInstanceFromNode(IndicesService.class);
+        IndexService test = indicesService.indexService("test");
+        IndexShard shard = test.shard(0);
+        ShardStats stats = new ShardStats(shard, new CommonStatsFlags());
+        assertEquals(shard.shardPath().getRootDataPath().toString(), stats.getDataPath());
+        assertEquals(shard.shardPath().getRootStatePath().toString(), stats.getStatePath());
+        assertEquals(shard.shardPath().isCustomDataPath(), stats.isCustomDataPath());
+
+        if (randomBoolean() || true) { // try to serialize it to ensure values survive the serialization
+            BytesStreamOutput out = new BytesStreamOutput();
+            stats.writeTo(out);
+            StreamInput in = StreamInput.wrap(out.bytes());
+            stats = ShardStats.readShardStats(in);
+        }
+        XContentBuilder builder = XContentFactory.jsonBuilder();
+        builder.startObject();
+        stats.toXContent(builder, EMPTY_PARAMS);
+        builder.endObject();
+        String xContent = builder.string();
+        StringBuilder expectedSubSequence = new StringBuilder("\"shard_path\":{\"state_path\":\"");
+        expectedSubSequence.append(shard.shardPath().getRootStatePath().toString());
+        expectedSubSequence.append("\",\"data_path\":\"");
+        expectedSubSequence.append(shard.shardPath().getRootDataPath().toString());
+        expectedSubSequence.append("\",\"is_custom_data_path\":").append(shard.shardPath().isCustomDataPath()).append("}");
+        assumeFalse("Some path weirdness on windows", Constants.WINDOWS);
+        assertTrue(xContent.contains(expectedSubSequence));
+    }
+
 }

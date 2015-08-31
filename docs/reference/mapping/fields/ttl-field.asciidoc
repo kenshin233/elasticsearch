@@ -1,5 +1,5 @@
 [[mapping-ttl-field]]
-=== `_ttl`
+=== `_ttl` field
 
 Some types of documents, such as session data or special offers, come with an
 expiration date. The `_ttl` field allows you to specify the minimum time a
@@ -104,3 +104,7 @@ may still be retrieved before they are purged.
 How many deletions are handled by a single <<docs-bulk,`bulk`>> request. The
 default value is `10000`.
 
+==== Note on `detect_noop`
+If an update tries to update just the `_ttl` without changing the `_source` of
+the document it's expiration time won't be updated if `detect_noop` is `true`.
+In 2.1 `detect_noop` defaults to `true`.

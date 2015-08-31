@@ -19,11 +19,13 @@
 
 package org.elasticsearch.cluster.routing.allocation.decider;
 
+import com.google.common.collect.Sets;
 import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.ClusterInfo;
 import org.elasticsearch.cluster.ClusterInfoService;
 import org.elasticsearch.cluster.DiskUsage;
+import org.elasticsearch.cluster.EmptyClusterInfoService;
 import org.elasticsearch.cluster.routing.RoutingNode;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.cluster.routing.ShardRoutingState;
@@ -37,6 +39,7 @@ import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.node.settings.NodeSettingsService;
 
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The {@link DiskThresholdDecider} checks that the node a shard is potentially
@@ -128,6 +131,8 @@ public class DiskThresholdDecider extends AllocationDecider {
      */
     class DiskListener implements ClusterInfoService.Listener {
         private final Client client;
+        private final Set<String> nodeHasPassedWatermark = Sets.newConcurrentHashSet();
+
         private long lastRunNS;
 
         DiskListener(Client client) {
@@ -159,24 +164,58 @@ public class DiskThresholdDecider extends AllocationDecider {
 
         @Override
         public void onNewInfo(ClusterInfo info) {
-            Map<String, DiskUsage> usages = info.getNodeDiskUsages();
+            Map<String, DiskUsage> usages = info.getNodeLeastAvailableDiskUsages();
             if (usages != null) {
                 boolean reroute = false;
-                for (DiskUsage entry : usages.values()) {
-                    warnAboutDiskIfNeeded(entry);
-                    if (entry.getFreeBytes() < DiskThresholdDecider.this.freeBytesThresholdHigh.bytes() ||
-                            entry.getFreeDiskAsPercentage() < DiskThresholdDecider.this.freeDiskThresholdHigh) {
+                String explanation = "";
+
+                // Garbage collect nodes that have been removed from the cluster
+                // from the map that tracks watermark crossing
+                Set<String> nodes = usages.keySet();
+                for (String node : nodeHasPassedWatermark) {
+                    if (nodes.contains(node) == false) {
+                        nodeHasPassedWatermark.remove(node);
+                    }
+                }
+
+                for (Map.Entry<String, DiskUsage> entry : usages.entrySet()) {
+                    String node = entry.getKey();
+                    DiskUsage usage = entry.getValue();
+                    warnAboutDiskIfNeeded(usage);
+                    if (usage.getFreeBytes() < DiskThresholdDecider.this.freeBytesThresholdHigh.bytes() ||
+                            usage.getFreeDiskAsPercentage() < DiskThresholdDecider.this.freeDiskThresholdHigh) {
                         if ((System.nanoTime() - lastRunNS) > DiskThresholdDecider.this.rerouteInterval.nanos()) {
                             lastRunNS = System.nanoTime();
                             reroute = true;
+                            explanation = "high disk watermark exceeded on one or more nodes";
                         } else {
                             logger.debug("high disk watermark exceeded on {} but an automatic reroute has occurred in the last [{}], skipping reroute",
-                                    entry, DiskThresholdDecider.this.rerouteInterval);
+                                    node, DiskThresholdDecider.this.rerouteInterval);
+                        }
+                        nodeHasPassedWatermark.add(node);
+                    } else if (usage.getFreeBytes() < DiskThresholdDecider.this.freeBytesThresholdLow.bytes() ||
+                            usage.getFreeDiskAsPercentage() < DiskThresholdDecider.this.freeDiskThresholdLow) {
+                        nodeHasPassedWatermark.add(node);
+                    } else {
+                        if (nodeHasPassedWatermark.contains(node)) {
+                            // The node has previously been over the high or
+                            // low watermark, but is no longer, so we should
+                            // reroute so any unassigned shards can be allocated
+                            // if they are able to be
+                            if ((System.nanoTime() - lastRunNS) > DiskThresholdDecider.this.rerouteInterval.nanos()) {
+                                lastRunNS = System.nanoTime();
+                                reroute = true;
+                                explanation = "one or more nodes has gone under the high or low watermark";
+                                nodeHasPassedWatermark.remove(node);
+                            } else {
+                                logger.debug("{} has gone below a disk threshold, but an automatic reroute has occurred in the last [{}], skipping reroute",
+                                        node, DiskThresholdDecider.this.rerouteInterval);
+                            }
                         }
                     }
                 }
                 if (reroute) {
-                    logger.info("high disk watermark exceeded on one or more nodes, rerouting shards");
+                    logger.info("rerouting shards: [{}]", explanation);
                     // Execute an empty reroute, but don't block on the response
                     client.admin().cluster().prepareReroute().execute();
                 }
@@ -188,7 +227,7 @@ public class DiskThresholdDecider extends AllocationDecider {
         // It's okay the Client is null here, because the empty cluster info
         // service will never actually call the listener where the client is
         // needed. Also this constructor is only used for tests
-        this(settings, new NodeSettingsService(settings), ClusterInfoService.EMPTY, null);
+        this(settings, new NodeSettingsService(settings), EmptyClusterInfoService.INSTANCE, null);
     }
 
     @Inject
@@ -274,7 +313,7 @@ public class DiskThresholdDecider extends AllocationDecider {
      * If subtractShardsMovingAway is set then the size of shards moving away is subtracted from the total size
      * of all shards
      */
-    public long sizeOfRelocatingShards(RoutingNode node, ClusterInfo clusterInfo, boolean subtractShardsMovingAway) {
+    public static long sizeOfRelocatingShards(RoutingNode node, ClusterInfo clusterInfo, boolean subtractShardsMovingAway) {
         long totalSize = 0;
         for (ShardRouting routing : node.shardsWithState(ShardRoutingState.RELOCATING, ShardRoutingState.INITIALIZING)) {
             if (routing.initializing() && routing.relocatingNodeId() != null) {
@@ -286,7 +325,7 @@ public class DiskThresholdDecider extends AllocationDecider {
         return totalSize;
     }
 
-    private long getShardSize(ShardRouting routing, ClusterInfo clusterInfo) {
+    static long getShardSize(ShardRouting routing, ClusterInfo clusterInfo) {
         Long shardSize = clusterInfo.getShardSize(routing);
         return shardSize == null ? 0 : shardSize;
     }
@@ -300,7 +339,9 @@ public class DiskThresholdDecider extends AllocationDecider {
 
         final double usedDiskThresholdLow = 100.0 - DiskThresholdDecider.this.freeDiskThresholdLow;
         final double usedDiskThresholdHigh = 100.0 - DiskThresholdDecider.this.freeDiskThresholdHigh;
-        DiskUsage usage = getDiskUsage(node, allocation);
+        ClusterInfo clusterInfo = allocation.clusterInfo();
+        Map<String, DiskUsage> usages = clusterInfo.getNodeMostAvailableDiskUsages();
+        DiskUsage usage = getDiskUsage(node, allocation, usages);
         // First, check that the node currently over the low watermark
         double freeDiskPercentage = usage.getFreeDiskAsPercentage();
         // Cache the used disk percentage for displaying disk percentages consistent with documentation
@@ -381,8 +422,7 @@ public class DiskThresholdDecider extends AllocationDecider {
         }
 
         // Secondly, check that allocating the shard to this node doesn't put it above the high watermark
-        Long shardSize = allocation.clusterInfo().getShardSize(shardRouting);
-        shardSize = shardSize == null ? 0 : shardSize;
+        final long shardSize = getShardSize(shardRouting, allocation.clusterInfo());
         double freeSpaceAfterShard = freeDiskPercentageAfterShardAssigned(usage, shardSize);
         long freeBytesAfterShard = freeBytes - shardSize;
         if (freeBytesAfterShard < freeBytesThresholdHigh.bytes()) {
@@ -403,11 +443,16 @@ public class DiskThresholdDecider extends AllocationDecider {
 
     @Override
     public Decision canRemain(ShardRouting shardRouting, RoutingNode node, RoutingAllocation allocation) {
+        if (shardRouting.currentNodeId().equals(node.nodeId()) == false) {
+            throw new IllegalArgumentException("Shard [" + shardRouting + "] is not allocated on node: [" + node.nodeId() + "]");
+        }
         final Decision decision = earlyTerminate(allocation);
         if (decision != null) {
             return decision;
         }
-        DiskUsage usage = getDiskUsage(node, allocation);
+        ClusterInfo clusterInfo = allocation.clusterInfo();
+        Map<String, DiskUsage> usages = clusterInfo.getNodeLeastAvailableDiskUsages();
+        DiskUsage usage = getDiskUsage(node, allocation, usages);
         // If this node is already above the high threshold, the shard cannot remain (get it off!)
         double freeDiskPercentage = usage.getFreeDiskAsPercentage();
         long freeBytes = usage.getFreeBytes();
@@ -434,9 +479,8 @@ public class DiskThresholdDecider extends AllocationDecider {
         return allocation.decision(Decision.YES, NAME, "enough disk for shard to remain on node, free: [%s]", new ByteSizeValue(freeBytes));
     }
 
-    private DiskUsage getDiskUsage(RoutingNode node, RoutingAllocation allocation) {
+    private DiskUsage getDiskUsage(RoutingNode node, RoutingAllocation allocation,  Map<String, DiskUsage> usages) {
         ClusterInfo clusterInfo = allocation.clusterInfo();
-        Map<String, DiskUsage> usages = clusterInfo.getNodeDiskUsages();
         DiskUsage usage = usages.get(node.nodeId());
         if (usage == null) {
             // If there is no usage, and we have other nodes in the cluster,
@@ -450,7 +494,7 @@ public class DiskThresholdDecider extends AllocationDecider {
 
         if (includeRelocations) {
             long relocatingShardsSize = sizeOfRelocatingShards(node, clusterInfo, true);
-            DiskUsage usageIncludingRelocations = new DiskUsage(node.nodeId(), node.node().name(),
+            DiskUsage usageIncludingRelocations = new DiskUsage(node.nodeId(), node.node().name(), "_na_",
                     usage.getTotalBytes(), usage.getFreeBytes() - relocatingShardsSize);
             if (logger.isTraceEnabled()) {
                 logger.trace("usage without relocations: {}", usage);
@@ -470,7 +514,7 @@ public class DiskThresholdDecider extends AllocationDecider {
      */
     public DiskUsage averageUsage(RoutingNode node, Map<String, DiskUsage> usages) {
         if (usages.size() == 0) {
-            return new DiskUsage(node.nodeId(), node.node().name(), 0, 0);
+            return new DiskUsage(node.nodeId(), node.node().name(), "_na_", 0, 0);
         }
         long totalBytes = 0;
         long freeBytes = 0;
@@ -478,7 +522,7 @@ public class DiskThresholdDecider extends AllocationDecider {
             totalBytes += du.getTotalBytes();
             freeBytes += du.getFreeBytes();
         }
-        return new DiskUsage(node.nodeId(), node.node().name(), totalBytes / usages.size(), freeBytes / usages.size());
+        return new DiskUsage(node.nodeId(), node.node().name(), "_na_", totalBytes / usages.size(), freeBytes / usages.size());
     }
 
     /**
@@ -490,8 +534,8 @@ public class DiskThresholdDecider extends AllocationDecider {
      */
     public double freeDiskPercentageAfterShardAssigned(DiskUsage usage, Long shardSize) {
         shardSize = (shardSize == null) ? 0 : shardSize;
-        DiskUsage newUsage = new DiskUsage(usage.getNodeId(), usage.getNodeName(),
-                usage.getTotalBytes(), usage.getFreeBytes() - shardSize);
+        DiskUsage newUsage = new DiskUsage(usage.getNodeId(), usage.getNodeName(), usage.getPath(),
+                usage.getTotalBytes(),  usage.getFreeBytes() - shardSize);
         return newUsage.getFreeDiskAsPercentage();
     }
 
@@ -562,7 +606,7 @@ public class DiskThresholdDecider extends AllocationDecider {
             return allocation.decision(Decision.YES, NAME, "cluster info unavailable");
         }
 
-        final Map<String, DiskUsage> usages = clusterInfo.getNodeDiskUsages();
+        final Map<String, DiskUsage> usages = clusterInfo.getNodeLeastAvailableDiskUsages();
         // Fail open if there are no disk usages available
         if (usages.isEmpty()) {
             if (logger.isTraceEnabled()) {

@@ -18,13 +18,20 @@
  */
 package org.elasticsearch.common.util.concurrent;
 
-import com.google.common.collect.Lists;
 import org.elasticsearch.common.Priority;
 import org.elasticsearch.common.unit.TimeValue;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
-import java.util.concurrent.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.RunnableFuture;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -40,14 +47,14 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
     private AtomicLong insertionOrder = new AtomicLong();
     private Queue<Runnable> current = ConcurrentCollections.newQueue();
 
-    PrioritizedEsThreadPoolExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit, ThreadFactory threadFactory) {
-        super(corePoolSize, maximumPoolSize, keepAliveTime, unit, new PriorityBlockingQueue<Runnable>(), threadFactory);
+    PrioritizedEsThreadPoolExecutor(String name, int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit, ThreadFactory threadFactory) {
+        super(name, corePoolSize, maximumPoolSize, keepAliveTime, unit, new PriorityBlockingQueue<Runnable>(), threadFactory);
     }
 
     public Pending[] getPending() {
-        List<Pending> pending = Lists.newArrayList();
-        addPending(Lists.newArrayList(current), pending, true);
-        addPending(Lists.newArrayList(getQueue()), pending, false);
+        List<Pending> pending = new ArrayList<>();
+        addPending(new ArrayList<>(current), pending, true);
+        addPending(new ArrayList<>(getQueue()), pending, false);
         return pending.toArray(new Pending[pending.size()]);
     }
 
@@ -161,8 +168,10 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
 
         private Runnable runnable;
         private final long insertionOrder;
-        private volatile ScheduledFuture<?> timeoutFuture;
-        private volatile boolean started = false;
+
+        // these two variables are protected by 'this'
+        private ScheduledFuture<?> timeoutFuture;
+        private boolean started = false;
 
         TieBreakingPrioritizedRunnable(PrioritizedRunnable runnable, long insertionOrder) {
             this(runnable, runnable.priority(), insertionOrder);
@@ -176,10 +185,12 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
 
         @Override
         public void run() {
-            // make the task as stared. This is needed for synchronization with the timeout handling
-            // see  #scheduleTimeout()
-            started = true;
-            FutureUtils.cancel(timeoutFuture);
+            synchronized (this) {
+                // make the task as stared. This is needed for synchronization with the timeout handling
+                // see  #scheduleTimeout()
+                started = true;
+                FutureUtils.cancel(timeoutFuture);
+            }
             runAndClean(runnable);
         }
 
@@ -193,17 +204,20 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
         }
 
         public void scheduleTimeout(ScheduledExecutorService timer, final Runnable timeoutCallback, TimeValue timeValue) {
-            timeoutFuture = timer.schedule(new Runnable() {
-                @Override
-                public void run() {
-                    if (remove(TieBreakingPrioritizedRunnable.this)) {
-                        runAndClean(timeoutCallback);
-                    }
+            synchronized (this) {
+                if (timeoutFuture != null) {
+                    throw new IllegalStateException("scheduleTimeout may only be called once");
                 }
-            }, timeValue.nanos(), TimeUnit.NANOSECONDS);
-            if (started) {
-                // if the actual action already it might have missed the setting of the future. Clean it ourselves.
-                FutureUtils.cancel(timeoutFuture);
+                if (started == false) {
+                    timeoutFuture = timer.schedule(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (remove(TieBreakingPrioritizedRunnable.this)) {
+                                runAndClean(timeoutCallback);
+                            }
+                        }
+                    }, timeValue.nanos(), TimeUnit.NANOSECONDS);
+                }
             }
         }
 

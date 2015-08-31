@@ -20,8 +20,9 @@
 package org.elasticsearch.search.internal;
 
 import com.carrotsearch.hppc.ObjectObjectAssociativeContainer;
+
+import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.Query;
-import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.util.Counter;
 import org.elasticsearch.action.search.SearchType;
@@ -40,12 +41,12 @@ import org.elasticsearch.index.query.ParsedQuery;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.similarity.SimilarityService;
 import org.elasticsearch.script.ScriptService;
-import org.elasticsearch.search.Scroll;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.aggregations.SearchContextAggregations;
 import org.elasticsearch.search.dfs.DfsSearchResult;
 import org.elasticsearch.search.fetch.FetchSearchResult;
-import org.elasticsearch.search.fetch.fielddata.FieldDataFieldsContext;
+import org.elasticsearch.search.fetch.FetchSubPhase;
+import org.elasticsearch.search.fetch.FetchSubPhaseContext;
 import org.elasticsearch.search.fetch.innerhits.InnerHitsContext;
 import org.elasticsearch.search.fetch.script.ScriptFieldsContext;
 import org.elasticsearch.search.fetch.source.FetchSourceContext;
@@ -57,6 +58,7 @@ import org.elasticsearch.search.scan.ScanContext;
 import org.elasticsearch.search.suggest.SuggestionSearchContext;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public abstract class FilteredSearchContext extends SearchContext {
@@ -150,13 +152,13 @@ public abstract class FilteredSearchContext extends SearchContext {
     }
 
     @Override
-    public Scroll scroll() {
-        return in.scroll();
+    public ScrollContext scrollContext() {
+        return in.scrollContext();
     }
 
     @Override
-    public SearchContext scroll(Scroll scroll) {
-        return in.scroll(scroll);
+    public SearchContext scrollContext(ScrollContext scroll) {
+        return in.scrollContext(scroll);
     }
 
     @Override
@@ -207,16 +209,6 @@ public abstract class FilteredSearchContext extends SearchContext {
     @Override
     public void addRescore(RescoreSearchContext rescore) {
         in.addRescore(rescore);
-    }
-
-    @Override
-    public boolean hasFieldDataFields() {
-        return in.hasFieldDataFields();
-    }
-
-    @Override
-    public FieldDataFieldsContext fieldDataFields() {
-        return in.fieldDataFields();
     }
 
     @Override
@@ -385,16 +377,6 @@ public abstract class FilteredSearchContext extends SearchContext {
     }
 
     @Override
-    public boolean queryRewritten() {
-        return in.queryRewritten();
-    }
-
-    @Override
-    public SearchContext updateRewriteQuery(Query rewriteQuery) {
-        return in.updateRewriteQuery(rewriteQuery);
-    }
-
-    @Override
     public int from() {
         return in.from();
     }
@@ -497,16 +479,6 @@ public abstract class FilteredSearchContext extends SearchContext {
     @Override
     public void keepAlive(long keepAlive) {
         in.keepAlive(keepAlive);
-    }
-
-    @Override
-    public void lastEmittedDoc(ScoreDoc doc) {
-        in.lastEmittedDoc(doc);
-    }
-
-    @Override
-    public ScoreDoc lastEmittedDoc() {
-        return in.lastEmittedDoc();
     }
 
     @Override
@@ -627,5 +599,15 @@ public abstract class FilteredSearchContext extends SearchContext {
     @Override
     public void copyContextAndHeadersFrom(HasContextAndHeaders other) {
         in.copyContextAndHeadersFrom(other);
+    }
+
+    @Override
+    public <SubPhaseContext extends FetchSubPhaseContext> SubPhaseContext getFetchSubPhaseContext(FetchSubPhase.ContextFactory<SubPhaseContext> contextFactory) {
+        return in.getFetchSubPhaseContext(contextFactory);
+    }
+
+    @Override
+    public Map<Class<?>, Collector> queryCollectors() {
+        return in.queryCollectors();
     }
 }

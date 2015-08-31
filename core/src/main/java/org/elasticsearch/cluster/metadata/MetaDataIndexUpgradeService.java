@@ -18,16 +18,28 @@
  */
 package org.elasticsearch.cluster.metadata;
 
+import com.carrotsearch.hppc.cursors.ObjectCursor;
+import org.apache.lucene.analysis.Analyzer;
+import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.Version;
 import org.elasticsearch.cluster.routing.DjbHashFunction;
 import org.elasticsearch.cluster.routing.HashFunction;
 import org.elasticsearch.cluster.routing.SimpleHashFunction;
 import org.elasticsearch.cluster.routing.UnassignedInfo;
+import org.elasticsearch.common.Classes;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import com.google.common.collect.ImmutableSet;
+import org.elasticsearch.index.Index;
+import org.elasticsearch.index.analysis.AnalysisService;
+import org.elasticsearch.index.analysis.NamedAnalyzer;
+import org.elasticsearch.index.mapper.MapperService;
+import org.elasticsearch.index.similarity.SimilarityLookupService;
+import org.elasticsearch.index.store.IndexStoreModule;
+import org.elasticsearch.script.ScriptService;
 
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -45,24 +57,33 @@ public class MetaDataIndexUpgradeService extends AbstractComponent {
 
     private final Class<? extends HashFunction> pre20HashFunction;
     private final Boolean pre20UseType;
+    private final ScriptService scriptService;
 
     @Inject
-    public MetaDataIndexUpgradeService(Settings settings) {
+    public MetaDataIndexUpgradeService(Settings settings, ScriptService scriptService) {
         super(settings);
-
+        this.scriptService = scriptService;
         final String pre20HashFunctionName = settings.get(DEPRECATED_SETTING_ROUTING_HASH_FUNCTION, null);
         final boolean hasCustomPre20HashFunction = pre20HashFunctionName != null;
         // the hash function package has changed we replace the two hash functions if their fully qualified name is used.
         if (hasCustomPre20HashFunction) {
             switch (pre20HashFunctionName) {
+                case "Simple":
+                case "simple":
                 case "org.elasticsearch.cluster.routing.operation.hash.simple.SimpleHashFunction":
                     pre20HashFunction = SimpleHashFunction.class;
                     break;
+                case "Djb":
+                case "djb":
                 case "org.elasticsearch.cluster.routing.operation.hash.djb.DjbHashFunction":
                     pre20HashFunction = DjbHashFunction.class;
                     break;
                 default:
-                    pre20HashFunction = settings.getAsClass(DEPRECATED_SETTING_ROUTING_HASH_FUNCTION, DjbHashFunction.class, "org.elasticsearch.cluster.routing.", "HashFunction");
+                    try {
+                        pre20HashFunction = Class.forName(pre20HashFunctionName).asSubclass(HashFunction.class);
+                    } catch (ClassNotFoundException|NoClassDefFoundError e) {
+                        throw new ElasticsearchException("failed to load custom hash function [" + pre20HashFunctionName + "]", e);
+                    }
             }
         } else {
             pre20HashFunction = DjbHashFunction.class;
@@ -83,10 +104,62 @@ public class MetaDataIndexUpgradeService extends AbstractComponent {
      */
     public IndexMetaData upgradeIndexMetaData(IndexMetaData indexMetaData) {
         // Throws an exception if there are too-old segments:
+        if (isUpgraded(indexMetaData)) {
+            return indexMetaData;
+        }
         checkSupportedVersion(indexMetaData);
         IndexMetaData newMetaData = upgradeLegacyRoutingSettings(indexMetaData);
         newMetaData = addDefaultUnitsIfNeeded(newMetaData);
+        checkMappingsCompatibility(newMetaData);
+        newMetaData = upgradeSettings(newMetaData);
+        newMetaData = markAsUpgraded(newMetaData);
         return newMetaData;
+    }
+
+    IndexMetaData upgradeSettings(IndexMetaData indexMetaData) {
+        final String storeType = indexMetaData.getSettings().get(IndexStoreModule.STORE_TYPE);
+        if (storeType != null) {
+            final String upgradeStoreType;
+            switch (storeType.toLowerCase(Locale.ROOT)) {
+                case "nio_fs":
+                case "niofs":
+                    upgradeStoreType = "niofs";
+                    break;
+                case "mmap_fs":
+                case "mmapfs":
+                    upgradeStoreType = "mmapfs";
+                    break;
+                case "simple_fs":
+                case "simplefs":
+                    upgradeStoreType = "simplefs";
+                    break;
+                case "default":
+                    upgradeStoreType = "default";
+                    break;
+                case "fs":
+                    upgradeStoreType = "fs";
+                    break;
+                default:
+                    upgradeStoreType = storeType;
+            }
+            if (storeType.equals(upgradeStoreType) == false) {
+                Settings indexSettings = Settings.builder().put(indexMetaData.settings())
+                        .put(IndexStoreModule.STORE_TYPE, upgradeStoreType)
+                        .build();
+                return IndexMetaData.builder(indexMetaData)
+                        .version(indexMetaData.version())
+                        .settings(indexSettings)
+                        .build();
+            }
+        }
+        return indexMetaData;
+    }
+
+    /**
+     * Checks if the index was already opened by this version of Elasticsearch and doesn't require any additional checks.
+     */
+    private boolean isUpgraded(IndexMetaData indexMetaData) {
+        return indexMetaData.upgradeVersion().onOrAfter(Version.V_2_0_0_beta1);
     }
 
     /**
@@ -239,4 +312,66 @@ public class MetaDataIndexUpgradeService extends AbstractComponent {
         // No changes:
         return indexMetaData;
     }
+
+
+    /**
+     * Checks the mappings for compatibility with the current version
+     */
+    private void checkMappingsCompatibility(IndexMetaData indexMetaData) {
+        Index index = new Index(indexMetaData.getIndex());
+        Settings settings = indexMetaData.settings();
+        try {
+            SimilarityLookupService similarityLookupService = new SimilarityLookupService(index, settings);
+            // We cannot instantiate real analysis server at this point because the node might not have
+            // been started yet. However, we don't really need real analyzers at this stage - so we can fake it
+            try (AnalysisService analysisService = new FakeAnalysisService(index, settings)) {
+                try (MapperService mapperService = new MapperService(index, settings, analysisService, similarityLookupService, scriptService)) {
+                    for (ObjectCursor<MappingMetaData> cursor : indexMetaData.getMappings().values()) {
+                        MappingMetaData mappingMetaData = cursor.value;
+                        mapperService.merge(mappingMetaData.type(), mappingMetaData.source(), false, false);
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            // Wrap the inner exception so we have the index name in the exception message
+            throw new IllegalStateException("unable to upgrade the mappings for the index [" + indexMetaData.getIndex() + "], reason: [" + ex.getMessage() + "]", ex);
+        }
+    }
+
+    /**
+     * Marks index as upgraded so we don't have to test it again
+     */
+    private IndexMetaData markAsUpgraded(IndexMetaData indexMetaData) {
+        Settings settings = Settings.builder().put(indexMetaData.settings()).put(IndexMetaData.SETTING_VERSION_UPGRADED, Version.CURRENT).build();
+        return IndexMetaData.builder(indexMetaData).settings(settings).build();
+    }
+
+    /**
+     * A fake analysis server that returns the same keyword analyzer for all requests
+     */
+    private static class FakeAnalysisService extends AnalysisService {
+
+        private Analyzer fakeAnalyzer = new Analyzer() {
+            @Override
+            protected TokenStreamComponents createComponents(String fieldName) {
+                throw new UnsupportedOperationException("shouldn't be here");
+            }
+        };
+
+        public FakeAnalysisService(Index index, Settings indexSettings) {
+            super(index, indexSettings);
+        }
+
+        @Override
+        public NamedAnalyzer analyzer(String name) {
+            return new NamedAnalyzer(name, fakeAnalyzer);
+        }
+
+        @Override
+        public void close() {
+            fakeAnalyzer.close();
+            super.close();
+        }
+    }
+
 }

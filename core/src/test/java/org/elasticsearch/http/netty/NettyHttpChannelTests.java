@@ -26,9 +26,9 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.indices.breaker.NoneCircuitBreakerService;
 import org.elasticsearch.rest.RestResponse;
 import org.elasticsearch.rest.RestStatus;
-import org.elasticsearch.test.ElasticsearchTestCase;
-import org.elasticsearch.test.cache.recycler.MockBigArrays;
-import org.elasticsearch.test.cache.recycler.MockPageCacheRecycler;
+import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.common.util.MockBigArrays;
+import org.elasticsearch.cache.recycler.MockPageCacheRecycler;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
@@ -44,7 +44,7 @@ import java.util.List;
 
 import static org.hamcrest.Matchers.*;
 
-public class NettyHttpChannelTests extends ElasticsearchTestCase {
+public class NettyHttpChannelTests extends ESTestCase {
 
     private NetworkService networkService;
     private ThreadPool threadPool;

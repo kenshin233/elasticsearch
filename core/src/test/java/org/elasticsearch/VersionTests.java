@@ -22,7 +22,7 @@ package org.elasticsearch;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.VersionUtils;
 import org.hamcrest.Matchers;
 import org.junit.Test;
@@ -39,7 +39,7 @@ import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.sameInstance;
 
-public class VersionTests extends ElasticsearchTestCase {
+public class VersionTests extends ESTestCase {
     
     public void testMavenVersion() {
         // maven sets this property to ensure that the latest version
@@ -203,10 +203,15 @@ public class VersionTests extends ElasticsearchTestCase {
                 
                 // only the latest version for a branch should be a snapshot (ie unreleased)
                 String branchName = "" + v.major + "." + v.minor;
+                if (v.equals(Version.V_2_0_0_beta1)) {
+                    assertTrue("Remove this once beta1 is released", v.snapshot());
+                    continue; // this is just a temporary fix until we have a snapshot for the beta since we now have 2 unreleased version of the same major.minor group
+                }
                 Version maxBranchVersion = maxBranchVersions.get(branchName);
                 if (maxBranchVersion == null) {
                     maxBranchVersions.put(branchName, v);
                 } else if (v.after(maxBranchVersion)) {
+
                     assertFalse("Version " + maxBranchVersion + " cannot be a snapshot because version " + v + " exists", maxBranchVersion.snapshot());
                     maxBranchVersions.put(branchName, v);
                 }

@@ -19,23 +19,18 @@
 
 package org.elasticsearch.cloud.aws;
 
-import com.carrotsearch.randomizedtesting.annotations.TestGroup;
-
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.io.PathUtils;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.env.Environment;
-import org.elasticsearch.env.FailedToResolveConfigException;
+import org.elasticsearch.common.settings.SettingsException;
 import org.elasticsearch.plugin.cloud.aws.CloudAwsPlugin;
-import org.elasticsearch.plugins.PluginsService;
-import org.elasticsearch.test.ElasticsearchIntegrationTest;
-import org.elasticsearch.test.ElasticsearchIntegrationTest.ThirdParty;
+import org.elasticsearch.plugins.Plugin;
+import org.elasticsearch.test.ESIntegTestCase;
+import org.elasticsearch.test.ESIntegTestCase.ThirdParty;
 import org.junit.After;
 import org.junit.Before;
 
-import java.lang.annotation.Documented;
-import java.lang.annotation.Inherited;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -46,7 +41,7 @@ import java.util.Map;
  * in order to run these tests.
  */
 @ThirdParty
-public abstract class AbstractAwsTest extends ElasticsearchIntegrationTest {
+public abstract class AbstractAwsTest extends ESIntegTestCase {
 
     /**
      * Those properties are set by the AWS SDK v1.9.4 and if not ignored,
@@ -82,24 +77,25 @@ public abstract class AbstractAwsTest extends ElasticsearchIntegrationTest {
                 Settings.Builder settings = Settings.builder()
                 .put(super.nodeSettings(nodeOrdinal))
                 .put("path.home", createTempDir())
-                .put("plugin.types", CloudAwsPlugin.class.getName())
-                .put(AwsModule.S3_SERVICE_TYPE_KEY, TestAwsS3Service.class)
                 .put("cloud.aws.test.random", randomInt())
                 .put("cloud.aws.test.write_failures", 0.1)
                 .put("cloud.aws.test.read_failures", 0.1);
 
-        Environment environment = new Environment(settings.build());
-
         // if explicit, just load it and don't load from env
         try {
             if (Strings.hasText(System.getProperty("tests.config"))) {
-                settings.loadFromUrl(environment.resolveConfig(System.getProperty("tests.config")));
+                settings.loadFromPath(PathUtils.get(System.getProperty("tests.config")));
             } else {
                 throw new IllegalStateException("to run integration tests, you need to set -Dtest.thirdparty=true and -Dtests.config=/path/to/elasticsearch.yml");
             }
-        } catch (FailedToResolveConfigException exception) {
+        } catch (SettingsException exception) {
             throw new IllegalStateException("your test configuration file is incorrect: " + System.getProperty("tests.config"), exception);
         }
         return settings.build();
+    }
+
+    @Override
+    protected Collection<Class<? extends Plugin>> nodePlugins() {
+        return pluginList(CloudAwsPlugin.class, TestAwsS3Service.TestPlugin.class);
     }
 }

@@ -5,16 +5,28 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>org.elasticsearch.distribution</groupId>
-        <artifactId>elasticsearch-distribution</artifactId>
-        <version>2.0.0-beta1-SNAPSHOT</version>
+        <artifactId>distributions</artifactId>
+        <version>2.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>elasticsearch-rpm</artifactId>
-    <name>Elasticsearch RPM Distribution</name>
+    <groupId>org.elasticsearch.distribution.rpm</groupId>
+    <artifactId>elasticsearch</artifactId>
+    <name>Distribution: RPM</name>
     <packaging>rpm</packaging>
+    <description>The RPM distribution of Elasticsearch</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.elasticsearch.distribution.fully-loaded</groupId>
+            <artifactId>elasticsearch</artifactId>
+            <version>${elasticsearch.version}</version>
+            <type>pom</type>
+        </dependency>
+    </dependencies>
 
     <properties>
-        <skip.integ.tests>true</skip.integ.tests>
+        <skip.unit.tests>true</skip.unit.tests>
+        <rpm.outputDirectory>${project.build.directory}/releases/</rpm.outputDirectory>
     </properties>
 
     <build>
@@ -94,6 +106,13 @@
                     <group>Application/Internet</group>
                     <packager>Elasticsearch</packager>
                     <prefix>/usr</prefix>
+                    <!-- To get rpm-maven-plugin to pickup targetOS you need
+                         to specify needarch too.... If you don't specify
+                         targetOS then it'll just use whatever the current
+                         machine's OS is which means you can't build rpms for
+                         linux on OSX even if you have rpmbuild.... -->
+                    <needarch>noarch</needarch>
+                    <targetOS>linux</targetOS>
                     <changelogFile>src/changelog</changelogFile>
                     <defineStatements>
                         <defineStatement>_unpackaged_files_terminate_build 0</defineStatement>
@@ -104,6 +123,7 @@
                     <defaultUsername>root</defaultUsername>
                     <defaultGroupname>root</defaultGroupname>
                     <icon>${project.basedir}/src/main/resources/logo/elastic.gif</icon>
+                    <description>Elasticsearch is a distributed RESTful search engine built for the cloud. Reference documentation can be found at https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html and the 'Elasticsearch: The Definitive Guide' book can be found at https://www.elastic.co/guide/en/elasticsearch/guide/current/index.html</description>
                     <mappings>
                         <!-- Add bin directory -->
                         <mapping>
@@ -122,6 +142,15 @@
                         </mapping>
                         <!-- Add configuration files -->
                         <mapping>
+                            <!-- Explicitly add conf.dir to the file list so
+                                 that it is removed when the package is removed.
+                                 This is required because the scripts
+                                 subdirectory is created outside of the mapping
+                                 that creates the conf.dir.-->
+                            <directory>${packaging.elasticsearch.conf.dir}</directory>
+                            <configuration>noreplace</configuration>
+                        </mapping>
+                        <mapping>
                             <directory>${packaging.elasticsearch.conf.dir}/</directory>
                             <configuration>noreplace</configuration>
                             <sources>
@@ -132,6 +161,10 @@
                                     </includes>
                                 </source>
                             </sources>
+                        </mapping>
+                        <mapping>
+                            <directory>${packaging.elasticsearch.conf.dir}/scripts</directory>
+                            <configuration>noreplace</configuration>
                         </mapping>
                         <!-- Add environment vars file -->
                         <mapping>
@@ -295,8 +328,7 @@
                                     <version>${project.version}</version>
                                     <type>${project.packaging}</type>
                                     <overWrite>true</overWrite>
-                                    <outputDirectory>${project.build.directory}/releases/</outputDirectory>
-                                    <destFileName>elasticsearch-${project.version}.rpm</destFileName>
+                                    <outputDirectory>${rpm.outputDirectory}</outputDirectory>
                                 </artifactItem>
                             </artifactItems>
                         </configuration>
@@ -306,27 +338,34 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-antrun-plugin</artifactId>
-                <version>1.8</version>
                 <executions>
+                    <!-- start up external cluster -->
                     <execution>
-                        <id>check-license</id>
-                        <phase>verify</phase>
+                        <id>integ-setup</id>
+                        <phase>pre-integration-test</phase>
                         <goals>
                             <goal>run</goal>
                         </goals>
                         <configuration>
+                            <skip>${skip.integ.tests}</skip>
                             <target>
-                                <condition property="licenses.exists">
-                                    <available file="${basedir}/../licenses" type="dir"/>
-                                </condition>
-                                <echo taskName="license check">Running license check</echo>
-                                <!-- on windows checksums are calculated wrong -->
-                                <exec failonerror="${licenses.exists}" executable="perl" dir="${elasticsearch.tools.directory}/license-check" osfamily="unix" >
-                                    <arg value="check_license_and_sha.pl"/>
-                                    <arg value="--check"/>
-                                    <arg value="${basedir}/../licenses"/>
-                                    <arg value="${basedir}/target/releases/${project.build.finalName}.rpm"/>
-                                </exec>
+                                <ant antfile="${elasticsearch.integ.antfile}" target="start-external-cluster-rpm">
+                                    <property name="tests.jvm.argline" value="${tests.jvm.argline}"/>
+                                </ant>
+                            </target>
+                        </configuration>
+                    </execution>
+                    <!-- shut down external cluster -->
+                    <execution>
+                        <id>integ-teardown</id>
+                        <phase>post-integration-test</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${skip.integ.tests}</skip>
+                            <target>
+                                <ant antfile="${elasticsearch.integ.antfile}" target="stop-external-cluster"/>
                             </target>
                         </configuration>
                     </execution>
@@ -336,31 +375,6 @@
     </build>
 
     <profiles>
-        <profile>
-            <id>release</id>
-            <activation>
-                <property>
-                    <name>package.rpm</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>rpm-maven-plugin</artifactId>
-                        <executions>
-                            <execution>
-                                <id>attach-rpm</id>
-                                <goals>
-                                    <goal>attached-rpm</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
         <profile>
             <id>sign-rpm</id>
             <activation>

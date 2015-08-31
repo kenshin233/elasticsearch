@@ -30,7 +30,7 @@ import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.index.mapper.*;
-import org.elasticsearch.test.ElasticsearchSingleNodeTest;
+import org.elasticsearch.test.ESSingleNodeTestCase;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -38,9 +38,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
-import static org.hamcrest.Matchers.*;
+import static org.hamcrest.Matchers.equalTo;
 
-public class DefaultSourceMappingTests extends ElasticsearchSingleNodeTest {
+public class DefaultSourceMappingTests extends ESSingleNodeTestCase {
 
     public void testNoFormat() throws Exception {
         String mapping = XContentFactory.jsonBuilder().startObject().startObject("type")
@@ -202,7 +202,7 @@ public class DefaultSourceMappingTests extends ElasticsearchSingleNodeTest {
         MapperService mapperService = createIndex("test").mapperService();
         mapperService.merge(MapperService.DEFAULT_MAPPING, new CompressedXContent(defaultMapping), true, false);
 
-        DocumentMapper mapper = mapperService.documentMapperWithAutoCreate("my_type").v1();
+        DocumentMapper mapper = mapperService.documentMapperWithAutoCreate("my_type").getDocumentMapper();
         assertThat(mapper.type(), equalTo("my_type"));
         assertThat(mapper.sourceMapper().enabled(), equalTo(false));
     }
@@ -308,5 +308,19 @@ public class DefaultSourceMappingTests extends ElasticsearchSingleNodeTest {
             .startObject("_source").array("excludes", "foo.*").endObject()
             .endObject().endObject().string();
         assertFalse(parser.parse(mapping).sourceMapper().isComplete());
+    }
+
+    public void testSourceObjectContainsExtraTokens() throws Exception {
+        String mapping = XContentFactory.jsonBuilder().startObject().startObject("type").endObject().endObject().string();
+        DocumentMapper documentMapper = createIndex("test").mapperService().documentMapperParser().parse(mapping);
+
+        try {
+            documentMapper.parse("test", "type", "1", new BytesArray("{}}")); // extra end object (invalid JSON)
+            fail("Expected parse exception");
+        } catch (MapperParsingException e) {
+            assertNotNull(e.getRootCause());
+            String message = e.getRootCause().getMessage();
+            assertTrue(message, message.contains("Unexpected close marker '}'"));
+        }
     }
 }

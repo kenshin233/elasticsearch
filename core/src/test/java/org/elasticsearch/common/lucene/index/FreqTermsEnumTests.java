@@ -19,10 +19,8 @@
 
 package org.elasticsearch.common.lucene.index;
 
-import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
-
 import org.apache.lucene.analysis.core.KeywordAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
@@ -44,29 +42,24 @@ import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.IOUtils;
 import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.common.util.BigArrays;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static com.carrotsearch.randomizedtesting.RandomizedTest.frequently;
-import static com.carrotsearch.randomizedtesting.RandomizedTest.getRandom;
-import static com.carrotsearch.randomizedtesting.RandomizedTest.randomAsciiOfLength;
-import static com.carrotsearch.randomizedtesting.RandomizedTest.randomBoolean;
-import static com.carrotsearch.randomizedtesting.RandomizedTest.randomInt;
-import static com.carrotsearch.randomizedtesting.RandomizedTest.randomIntBetween;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 
 /**
  */
-public class FreqTermsEnumTests extends ElasticsearchTestCase {
+public class FreqTermsEnumTests extends ESTestCase {
 
     private String[] terms;
     private IndexWriter iw;
@@ -148,7 +141,7 @@ public class FreqTermsEnumTests extends ElasticsearchTestCase {
 
         // now go over each doc, build the relevant references and filter
         reader = DirectoryReader.open(iw, true);
-        List<Term> filterTerms = Lists.newArrayList();
+        List<Term> filterTerms = new ArrayList<>();
         for (int docId = 0; docId < reader.maxDoc(); docId++) {
             Document doc = reader.document(docId);
             addFreqs(doc, referenceAll);
@@ -212,7 +205,7 @@ public class FreqTermsEnumTests extends ElasticsearchTestCase {
     private void assertAgainstReference(FreqTermsEnum termsEnum, Map<String, FreqHolder> reference, boolean docFreq, boolean totalTermFreq) throws Exception {
         int cycles = randomIntBetween(1, 5);
         for (int i = 0; i < cycles; i++) {
-            List<String> terms = Lists.newArrayList(Arrays.asList(this.terms));
+            List<String> terms = new ArrayList<>(Arrays.asList(this.terms));
 
            Collections.shuffle(terms, getRandom());
             for (String term : terms) {

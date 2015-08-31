@@ -111,6 +111,10 @@ public abstract class ReplicaShardAllocator extends AbstractComponent {
     }
 
     public boolean allocateUnassigned(RoutingAllocation allocation) {
+        return allocateUnassigned(allocation, System.currentTimeMillis());
+    }
+
+    public boolean allocateUnassigned(RoutingAllocation allocation, long allocateUnassignedTimestapm) {
         boolean changed = false;
         final RoutingNodes routingNodes = allocation.routingNodes();
         final RoutingNodes.UnassignedShards.UnassignedIterator unassignedIterator = routingNodes.unassigned().iterator();
@@ -165,7 +169,7 @@ public abstract class ReplicaShardAllocator extends AbstractComponent {
                     logger.debug("[{}][{}]: allocating [{}] to [{}] in order to reuse its unallocated persistent store", shard.index(), shard.id(), shard, nodeWithHighestMatch.node());
                     // we found a match
                     changed = true;
-                    unassignedIterator.initialize(nodeWithHighestMatch.nodeId());
+                    unassignedIterator.initialize(nodeWithHighestMatch.nodeId(), shard.version(), allocation.clusterInfo().getShardSize(shard, ShardRouting.UNAVAILABLE_EXPECTED_SHARD_SIZE));
                 }
             } else if (matchingNodes.hasAnyData() == false) {
                 // if we didn't manage to find *any* data (regardless of matching sizes), check if the allocation
@@ -174,7 +178,7 @@ public abstract class ReplicaShardAllocator extends AbstractComponent {
                 //       will anyhow wait to find an existing copy of the shard to be allocated
                 // note: the other side of the equation is scheduling a reroute in a timely manner, which happens in the RoutingService
                 IndexMetaData indexMetaData = allocation.metaData().index(shard.getIndex());
-                long delay = shard.unassignedInfo().getDelayAllocationExpirationIn(settings, indexMetaData.getSettings());
+                long delay = shard.unassignedInfo().getDelayAllocationExpirationIn(allocateUnassignedTimestapm, settings, indexMetaData.getSettings());
                 if (delay > 0) {
                     logger.debug("[{}][{}]: delaying allocation of [{}] for [{}]", shard.index(), shard.id(), shard, TimeValue.timeValueMillis(delay));
                     /**

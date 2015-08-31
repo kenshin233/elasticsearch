@@ -19,7 +19,6 @@
 
 package org.elasticsearch.action.admin.cluster.node.stats;
 
-import com.google.common.collect.Lists;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.nodes.BaseNodeRequest;
 import org.elasticsearch.action.support.nodes.TransportNodesAction;
@@ -35,6 +34,7 @@ import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
@@ -56,7 +56,7 @@ public class TransportNodesStatsAction extends TransportNodesAction<NodesStatsRe
 
     @Override
     protected NodesStatsResponse newResponse(NodesStatsRequest nodesInfoRequest, AtomicReferenceArray responses) {
-        final List<NodeStats> nodeStats = Lists.newArrayList();
+        final List<NodeStats> nodeStats = new ArrayList<>();
         for (int i = 0; i < responses.length(); i++) {
             Object resp = responses.get(i);
             if (resp instanceof NodeStats) {
@@ -79,8 +79,8 @@ public class TransportNodesStatsAction extends TransportNodesAction<NodesStatsRe
     @Override
     protected NodeStats nodeOperation(NodeStatsRequest nodeStatsRequest) {
         NodesStatsRequest request = nodeStatsRequest.request;
-        return nodeService.stats(request.indices(), request.os(), request.process(), request.jvm(), request.threadPool(), request.network(),
-                request.fs(), request.transport(), request.http(), request.breaker());
+        return nodeService.stats(request.indices(), request.os(), request.process(), request.jvm(), request.threadPool(),
+                request.fs(), request.transport(), request.http(), request.breaker(), request.script());
     }
 
     @Override

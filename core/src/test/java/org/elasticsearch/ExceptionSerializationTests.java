@@ -62,7 +62,7 @@ import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.search.warmer.IndexWarmerMissingException;
 import org.elasticsearch.snapshots.SnapshotException;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.TestSearchContext;
 import org.elasticsearch.test.VersionUtils;
 import org.elasticsearch.test.hamcrest.ElasticsearchAssertions;
@@ -78,10 +78,11 @@ import java.nio.file.FileVisitor;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
-public class ExceptionSerializationTests extends ElasticsearchTestCase {
+public class ExceptionSerializationTests extends ESTestCase {
 
     public void testExceptionRegistration()
             throws ClassNotFoundException, IOException, URISyntaxException {
@@ -151,7 +152,7 @@ public class ExceptionSerializationTests extends ElasticsearchTestCase {
                     pkg.append(p.getFileName().toString()).append(".");
                 }
                 pkg.append(filename.substring(0, filename.length() - 6));
-                return Thread.currentThread().getContextClassLoader().loadClass(pkg.toString());
+                return getClass().getClassLoader().loadClass(pkg.toString());
             }
 
             @Override
@@ -605,5 +606,21 @@ public class ExceptionSerializationTests extends ElasticsearchTestCase {
         ElasticsearchSecurityException e = serialize(ex);
         assertEquals(ex.status(), e.status());
         assertEquals(RestStatus.UNAUTHORIZED, e.status());
+    }
+
+    public void testInterruptedException() throws IOException {
+        InterruptedException orig = randomBoolean() ? new InterruptedException("boom") : new InterruptedException();
+        InterruptedException ex = serialize(orig);
+        assertEquals(orig.getMessage(), ex.getMessage());
+    }
+
+    public static class UnknownException extends Exception {
+        public UnknownException(String message) {
+            super(message);
+        }
+
+        public UnknownException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 }

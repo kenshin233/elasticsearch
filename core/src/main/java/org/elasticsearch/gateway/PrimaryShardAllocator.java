@@ -19,7 +19,6 @@
 
 package org.elasticsearch.gateway;
 
-import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import org.apache.lucene.util.CollectionUtil;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
@@ -34,7 +33,12 @@ import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.settings.IndexSettings;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * The primary shard allocator allocates primary shard that were not created as
@@ -94,12 +98,12 @@ public abstract class PrimaryShardAllocator extends AbstractComponent {
                 DiscoveryNode node = nodesToAllocate.yesNodes.get(0);
                 logger.debug("[{}][{}]: allocating [{}] to [{}] on primary allocation", shard.index(), shard.id(), shard, node);
                 changed = true;
-                unassignedIterator.initialize(node.id(), nodesAndVersions.highestVersion);
+                unassignedIterator.initialize(node.id(), nodesAndVersions.highestVersion, ShardRouting.UNAVAILABLE_EXPECTED_SHARD_SIZE);
             } else if (nodesToAllocate.throttleNodes.isEmpty() == true && nodesToAllocate.noNodes.isEmpty() == false) {
                 DiscoveryNode node = nodesToAllocate.noNodes.get(0);
                 logger.debug("[{}][{}]: forcing allocating [{}] to [{}] on primary allocation", shard.index(), shard.id(), shard, node);
                 changed = true;
-                unassignedIterator.initialize(node.id(), nodesAndVersions.highestVersion);
+                unassignedIterator.initialize(node.id(), nodesAndVersions.highestVersion, ShardRouting.UNAVAILABLE_EXPECTED_SHARD_SIZE);
             } else {
                 // we are throttling this, but we have enough to allocate to this node, ignore it for now
                 logger.debug("[{}][{}]: throttling allocation [{}] to [{}] on primary allocation", shard.index(), shard.id(), shard, nodesToAllocate.throttleNodes);
@@ -234,7 +238,7 @@ public abstract class PrimaryShardAllocator extends AbstractComponent {
         // Now that we have a map of nodes to versions along with the
         // number of allocations found (and not ignored), we need to sort
         // it so the node with the highest version is at the beginning
-        List<DiscoveryNode> nodesWithHighestVersion = Lists.newArrayList();
+        List<DiscoveryNode> nodesWithHighestVersion = new ArrayList<>();
         nodesWithHighestVersion.addAll(nodesWithVersion.keySet());
         CollectionUtil.timSort(nodesWithHighestVersion, new Comparator<DiscoveryNode>() {
             @Override

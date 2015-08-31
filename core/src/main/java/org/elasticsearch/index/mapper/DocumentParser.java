@@ -25,6 +25,7 @@ import org.apache.lucene.document.Field;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.util.CloseableThreadLocal;
+import org.elasticsearch.Version;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.joda.FormatDateTimeFormatter;
 import org.elasticsearch.common.settings.Settings;
@@ -42,6 +43,7 @@ import org.elasticsearch.index.mapper.internal.UidFieldMapper;
 import org.elasticsearch.index.mapper.object.ArrayValueMapperParser;
 import org.elasticsearch.index.mapper.object.ObjectMapper;
 import org.elasticsearch.index.mapper.object.RootObjectMapper;
+import org.elasticsearch.percolator.PercolatorService;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -98,38 +100,51 @@ class DocumentParser implements Closeable {
             context.reset(parser, new ParseContext.Document(), source);
 
             // will result in START_OBJECT
-            int countDownTokens = 0;
             XContentParser.Token token = parser.nextToken();
             if (token != XContentParser.Token.START_OBJECT) {
                 throw new MapperParsingException("Malformed content, must start with an object");
             }
+
             boolean emptyDoc = false;
-            token = parser.nextToken();
-            if (token == XContentParser.Token.END_OBJECT) {
-                // empty doc, we can handle it...
-                emptyDoc = true;
-            } else if (token != XContentParser.Token.FIELD_NAME) {
-                throw new MapperParsingException("Malformed content, after first object, either the type field or the actual properties should exist");
+            if (mapping.root.isEnabled()) {
+                token = parser.nextToken();
+                if (token == XContentParser.Token.END_OBJECT) {
+                    // empty doc, we can handle it...
+                    emptyDoc = true;
+                } else if (token != XContentParser.Token.FIELD_NAME) {
+                    throw new MapperParsingException("Malformed content, after first object, either the type field or the actual properties should exist");
+                }
             }
 
             for (MetadataFieldMapper metadataMapper : mapping.metadataMappers) {
                 metadataMapper.preParse(context);
             }
 
-            if (!emptyDoc) {
+            if (mapping.root.isEnabled() == false) {
+                // entire type is disabled
+                parser.skipChildren();
+            } else if (emptyDoc == false) {
                 Mapper update = parseObject(context, mapping.root);
                 if (update != null) {
                     context.addDynamicMappingsUpdate(update);
                 }
             }
 
-            for (int i = 0; i < countDownTokens; i++) {
-                parser.nextToken();
-            }
-
             for (MetadataFieldMapper metadataMapper : mapping.metadataMappers) {
                 metadataMapper.postParse(context);
             }
+
+            // try to parse the next token, this should be null if the object is ended properly
+            // but will throw a JSON exception if the extra tokens is not valid JSON (this will be handled by the catch)
+            if (Version.indexCreated(indexSettings).onOrAfter(Version.V_2_0_0_beta1)
+                && source.parser() == null && parser != null) {
+                // only check for end of tokens if we created the parser here
+                token = parser.nextToken();
+                if (token != null) {
+                    throw new IllegalArgumentException("Malformed content, found extra data after parsing: " + token);
+                }
+            }
+
         } catch (Throwable e) {
             // if its already a mapper parsing exception, no need to wrap it...
             if (e instanceof MapperParsingException) {
@@ -629,6 +644,7 @@ class DocumentParser implements Closeable {
                 // best-effort to not introduce a conflict
                 if (builder instanceof StringFieldMapper.Builder) {
                     StringFieldMapper.Builder stringBuilder = (StringFieldMapper.Builder) builder;
+                    stringBuilder.fieldDataSettings(existingFieldType.fieldDataType().getSettings());
                     stringBuilder.store(existingFieldType.stored());
                     stringBuilder.indexOptions(existingFieldType.indexOptions());
                     stringBuilder.tokenized(existingFieldType.tokenized());
@@ -638,6 +654,7 @@ class DocumentParser implements Closeable {
                     stringBuilder.searchAnalyzer(existingFieldType.searchAnalyzer());
                 } else if (builder instanceof NumberFieldMapper.Builder) {
                     NumberFieldMapper.Builder<?,?> numberBuilder = (NumberFieldMapper.Builder<?, ?>) builder;
+                    numberBuilder.fieldDataSettings(existingFieldType.fieldDataType().getSettings());
                     numberBuilder.store(existingFieldType.stored());
                     numberBuilder.indexOptions(existingFieldType.indexOptions());
                     numberBuilder.tokenized(existingFieldType.tokenized());

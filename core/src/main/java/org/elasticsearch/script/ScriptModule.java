@@ -19,7 +19,6 @@
 
 package org.elasticsearch.script;
 
-import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import org.elasticsearch.common.inject.AbstractModule;
 import org.elasticsearch.common.inject.multibindings.MapBinder;
@@ -30,6 +29,7 @@ import org.elasticsearch.script.expression.ExpressionScriptEngineService;
 import org.elasticsearch.script.groovy.GroovyScriptEngineService;
 import org.elasticsearch.script.mustache.MustacheScriptEngineService;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -41,11 +41,11 @@ public class ScriptModule extends AbstractModule {
 
     private final Settings settings;
 
-    private final List<Class<? extends ScriptEngineService>> scriptEngines = Lists.newArrayList();
+    private final List<Class<? extends ScriptEngineService>> scriptEngines = new ArrayList<>();
 
     private final Map<String, Class<? extends NativeScriptFactory>> scripts = Maps.newHashMap();
 
-    private final List<ScriptContext.Plugin> customScriptContexts = Lists.newArrayList();
+    private final List<ScriptContext.Plugin> customScriptContexts = new ArrayList<>();
 
     public ScriptModule(Settings settings) {
         this.settings = settings;
@@ -75,36 +75,25 @@ public class ScriptModule extends AbstractModule {
             scriptsBinder.addBinding(entry.getKey()).to(entry.getValue()).asEagerSingleton();
         }
 
-        // now, check for config based ones
-        Map<String, Settings> nativeSettings = settings.getGroups("script.native");
-        for (Map.Entry<String, Settings> entry : nativeSettings.entrySet()) {
-            String name = entry.getKey();
-            Class<? extends NativeScriptFactory> type = entry.getValue().getAsClass("type", NativeScriptFactory.class);
-            if (type == NativeScriptFactory.class) {
-                throw new IllegalArgumentException("type is missing for native script [" + name + "]");
-            }
-            scriptsBinder.addBinding(name).to(type).asEagerSingleton();
-        }
-
         Multibinder<ScriptEngineService> multibinder = Multibinder.newSetBinder(binder(), ScriptEngineService.class);
         multibinder.addBinding().to(NativeScriptEngineService.class);
 
         try {
-            settings.getClassLoader().loadClass("groovy.lang.GroovyClassLoader");
+            Class.forName("groovy.lang.GroovyClassLoader");
             multibinder.addBinding().to(GroovyScriptEngineService.class).asEagerSingleton();
         } catch (Throwable t) {
             Loggers.getLogger(ScriptService.class, settings).debug("failed to load groovy", t);
         }
         
         try {
-            settings.getClassLoader().loadClass("com.github.mustachejava.Mustache");
+            Class.forName("com.github.mustachejava.Mustache");
             multibinder.addBinding().to(MustacheScriptEngineService.class).asEagerSingleton();
         } catch (Throwable t) {
             Loggers.getLogger(ScriptService.class, settings).debug("failed to load mustache", t);
         }
 
         try {
-            settings.getClassLoader().loadClass("org.apache.lucene.expressions.Expression");
+            Class.forName("org.apache.lucene.expressions.Expression");
             multibinder.addBinding().to(ExpressionScriptEngineService.class).asEagerSingleton();
         } catch (Throwable t) {
             Loggers.getLogger(ScriptService.class, settings).debug("failed to load lucene expressions", t);

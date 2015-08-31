@@ -19,18 +19,22 @@
 
 package org.elasticsearch.action.support;
 
-import com.google.common.collect.Lists;
 import org.elasticsearch.ElasticsearchTimeoutException;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -39,7 +43,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.hamcrest.CoreMatchers.*;
 
-public class TransportActionFilterChainTests extends ElasticsearchTestCase {
+public class TransportActionFilterChainTests extends ESTestCase {
 
     private AtomicInteger counter;
 
@@ -71,7 +75,7 @@ public class TransportActionFilterChainTests extends ElasticsearchTestCase {
             }
         };
 
-        ArrayList<ActionFilter> actionFiltersByOrder = Lists.newArrayList(filters);
+        ArrayList<ActionFilter> actionFiltersByOrder = new ArrayList<>(filters);
         Collections.sort(actionFiltersByOrder, new Comparator<ActionFilter>() {
             @Override
             public int compare(ActionFilter o1, ActionFilter o2) {
@@ -79,7 +83,7 @@ public class TransportActionFilterChainTests extends ElasticsearchTestCase {
             }
         });
 
-        List<ActionFilter> expectedActionFilters = Lists.newArrayList();
+        List<ActionFilter> expectedActionFilters = new ArrayList<>();
         boolean errorExpected = false;
         for (ActionFilter filter : actionFiltersByOrder) {
             RequestTestFilter testFilter = (RequestTestFilter) filter;
@@ -101,7 +105,7 @@ public class TransportActionFilterChainTests extends ElasticsearchTestCase {
             assertThat("shouldn't get here if an error is not expected " + t.getMessage(), errorExpected, equalTo(true));
         }
 
-        List<RequestTestFilter> testFiltersByLastExecution = Lists.newArrayList();
+        List<RequestTestFilter> testFiltersByLastExecution = new ArrayList<>();
         for (ActionFilter actionFilter : actionFilters.filters()) {
             testFiltersByLastExecution.add((RequestTestFilter) actionFilter);
         }
@@ -112,7 +116,7 @@ public class TransportActionFilterChainTests extends ElasticsearchTestCase {
             }
         });
 
-        ArrayList<RequestTestFilter> finalTestFilters = Lists.newArrayList();
+        ArrayList<RequestTestFilter> finalTestFilters = new ArrayList<>();
         for (ActionFilter filter : testFiltersByLastExecution) {
             RequestTestFilter testFilter = (RequestTestFilter) filter;
             finalTestFilters.add(testFilter);
@@ -153,7 +157,7 @@ public class TransportActionFilterChainTests extends ElasticsearchTestCase {
             }
         };
 
-        ArrayList<ActionFilter> actionFiltersByOrder = Lists.newArrayList(filters);
+        ArrayList<ActionFilter> actionFiltersByOrder = new ArrayList<>(filters);
         Collections.sort(actionFiltersByOrder, new Comparator<ActionFilter>() {
             @Override
             public int compare(ActionFilter o1, ActionFilter o2) {
@@ -161,7 +165,7 @@ public class TransportActionFilterChainTests extends ElasticsearchTestCase {
             }
         });
 
-        List<ActionFilter> expectedActionFilters = Lists.newArrayList();
+        List<ActionFilter> expectedActionFilters = new ArrayList<>();
         boolean errorExpected = false;
         for (ActionFilter filter : actionFiltersByOrder) {
             ResponseTestFilter testFilter = (ResponseTestFilter) filter;
@@ -183,7 +187,7 @@ public class TransportActionFilterChainTests extends ElasticsearchTestCase {
             assertThat("shouldn't get here if an error is not expected " + t.getMessage(), errorExpected, equalTo(true));
         }
 
-        List<ResponseTestFilter> testFiltersByLastExecution = Lists.newArrayList();
+        List<ResponseTestFilter> testFiltersByLastExecution = new ArrayList<>();
         for (ActionFilter actionFilter : actionFilters.filters()) {
             testFiltersByLastExecution.add((ResponseTestFilter) actionFilter);
         }
@@ -194,7 +198,7 @@ public class TransportActionFilterChainTests extends ElasticsearchTestCase {
             }
         });
 
-        ArrayList<ResponseTestFilter> finalTestFilters = Lists.newArrayList();
+        ArrayList<ResponseTestFilter> finalTestFilters = new ArrayList<>();
         for (ActionFilter filter : testFiltersByLastExecution) {
             ResponseTestFilter testFilter = (ResponseTestFilter) filter;
             finalTestFilters.add(testFilter);

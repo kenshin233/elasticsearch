@@ -20,7 +20,7 @@ package org.elasticsearch.watcher;
 
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.LuceneTestCase;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.junit.Test;
 
 import java.io.BufferedWriter;
@@ -29,15 +29,13 @@ import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
 
-import static com.google.common.collect.Lists.newArrayList;
-import static org.hamcrest.Matchers.contains;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.*;
 
 @LuceneTestCase.SuppressFileSystems("ExtrasFS")
-public class FileWatcherTest extends ElasticsearchTestCase {
+public class FileWatcherTest extends ESTestCase {
 
     private class RecordingChangeListener extends FileChangesListener {
 
@@ -51,7 +49,7 @@ public class FileWatcherTest extends ElasticsearchTestCase {
             return rootDir.toUri().relativize(file.toUri()).getPath();
         }
 
-        private List<String> notifications = newArrayList();
+        private List<String> notifications = new ArrayList<>();
 
         @Override
         public void onFileInit(Path file) {

@@ -20,16 +20,12 @@
 package org.elasticsearch.index.mapper.string;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Lists;
-
 import org.apache.lucene.index.DocValuesType;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.index.IndexableFieldType;
-import org.apache.lucene.index.Term;
-import org.apache.lucene.queries.TermsQuery;
-import org.apache.lucene.search.TermQuery;
-import org.elasticsearch.common.lucene.search.Queries;
+import org.elasticsearch.Version;
+import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
@@ -43,26 +39,25 @@ import org.elasticsearch.index.mapper.DocumentMapper;
 import org.elasticsearch.index.mapper.DocumentMapperParser;
 import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.Mapper.BuilderContext;
+import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.MergeResult;
 import org.elasticsearch.index.mapper.ParseContext.Document;
 import org.elasticsearch.index.mapper.ParsedDocument;
 import org.elasticsearch.index.mapper.core.StringFieldMapper;
-import org.elasticsearch.test.ElasticsearchSingleNodeTest;
+import org.elasticsearch.test.ESSingleNodeTestCase;
+import org.elasticsearch.test.VersionUtils;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Map;
 
 import static org.elasticsearch.index.mapper.core.StringFieldMapper.Builder;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.notNullValue;
-import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.*;
 
 /**
  */
-public class SimpleStringMappingTests extends ElasticsearchSingleNodeTest {
+public class SimpleStringMappingTests extends ESSingleNodeTestCase {
 
     private static Settings DOC_VALUES_SETTINGS = Settings.builder().put(FieldDataType.FORMAT_KEY, FieldDataType.DOC_VALUES_FORMAT_VALUE).build();
 
@@ -227,22 +222,22 @@ public class SimpleStringMappingTests extends ElasticsearchSingleNodeTest {
                 .startObject("properties")
                 .startObject("field1")
                     .field("type", "string")
-                    .field("position_offset_gap", 1000)
+                    .field("position_increment_gap", 1000)
                 .endObject()
                 .startObject("field2")
                     .field("type", "string")
-                    .field("position_offset_gap", 1000)
+                    .field("position_increment_gap", 1000)
                     .field("analyzer", "standard")
                 .endObject()
                 .startObject("field3")
                     .field("type", "string")
-                    .field("position_offset_gap", 1000)
+                    .field("position_increment_gap", 1000)
                     .field("analyzer", "standard")
                     .field("search_analyzer", "simple")
                 .endObject()
                 .startObject("field4")
                     .field("type", "string")
-                    .field("position_offset_gap", 1000)
+                    .field("position_increment_gap", 1000)
                     .field("analyzer", "standard")
                     .field("search_analyzer", "simple")
                     .field("search_quote_analyzer", "simple")
@@ -251,7 +246,7 @@ public class SimpleStringMappingTests extends ElasticsearchSingleNodeTest {
                 .endObject().endObject().string();
 
         DocumentMapper mapper = parser.parse(mapping);
-        for (String fieldName : Lists.newArrayList("field1", "field2", "field3", "field4")) {
+        for (String fieldName : Arrays.asList("field1", "field2", "field3", "field4")) {
             Map<String, Object> serializedMap = getSerializedMap(fieldName, mapper);
             assertFalse(fieldName, serializedMap.containsKey("search_quote_analyzer"));
         }
@@ -261,12 +256,12 @@ public class SimpleStringMappingTests extends ElasticsearchSingleNodeTest {
                 .startObject("properties")
                 .startObject("field1")
                     .field("type", "string")
-                    .field("position_offset_gap", 1000)
+                    .field("position_increment_gap", 1000)
                     .field("search_quote_analyzer", "simple")
                 .endObject()
                 .startObject("field2")
                     .field("type", "string")
-                    .field("position_offset_gap", 1000)
+                    .field("position_increment_gap", 1000)
                     .field("analyzer", "standard")
                     .field("search_analyzer", "standard")
                     .field("search_quote_analyzer", "simple")
@@ -275,7 +270,7 @@ public class SimpleStringMappingTests extends ElasticsearchSingleNodeTest {
                 .endObject().endObject().string();
         
         mapper = parser.parse(mapping);
-        for (String fieldName : Lists.newArrayList("field1", "field2")) {
+        for (String fieldName : Arrays.asList("field1", "field2")) {
             Map<String, Object> serializedMap = getSerializedMap(fieldName, mapper);
             assertEquals(serializedMap.get("search_quote_analyzer"), "simple");
         }
@@ -523,4 +518,48 @@ public class SimpleStringMappingTests extends ElasticsearchSingleNodeTest {
         assertTrue(mergeResult.buildConflicts()[0].contains("cannot enable norms"));
     }
 
+    /**
+     * Test that expected exceptions are thrown when creating a new index with position_offset_gap
+     */
+    public void testPositionOffsetGapDeprecation() throws Exception {
+        // test deprecation exceptions on newly created indexes
+        String mapping = XContentFactory.jsonBuilder().startObject().startObject("type")
+                .startObject("properties")
+                .startObject("field1")
+                .field("type", "string")
+                .field("position_increment_gap", 10)
+                .endObject()
+                .startObject("field2")
+                .field("type", "string")
+                .field("position_offset_gap", 50)
+                .field("analyzer", "standard")
+                .endObject().endObject().endObject().endObject().string();
+        try {
+            parser.parse(mapping);
+            fail("Mapping definition should fail with the position_offset_gap setting");
+        }catch (MapperParsingException e) {
+            assertEquals(e.getMessage(), "Mapping definition for [field2] has unsupported parameters:  [position_offset_gap : 50]");
+        }
+    }
+
+    /**
+     * Test backward compatibility
+     */
+    public void testBackwardCompatible() throws Exception {
+
+        Settings settings = Settings.settingsBuilder().put(IndexMetaData.SETTING_VERSION_CREATED, VersionUtils.randomVersionBetween(random(), Version.V_1_0_0,
+                                         Version.V_1_7_1)).build();
+
+        DocumentMapperParser parser = createIndex("backward_compatible_index", settings).mapperService().documentMapperParser();
+
+        String mapping = XContentFactory.jsonBuilder().startObject().startObject("type")
+                .startObject("properties")
+                .startObject("field1")
+                .field("type", "string")
+                .field("position_offset_gap", 10)
+                .endObject().endObject().endObject().endObject().string();
+        parser.parse(mapping);
+
+        assertThat(parser.parse(mapping).mapping().toString(), containsString("\"position_increment_gap\":10"));
+    }
 }

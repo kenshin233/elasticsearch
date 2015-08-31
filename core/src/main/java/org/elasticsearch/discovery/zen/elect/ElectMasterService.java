@@ -20,15 +20,21 @@
 package org.elasticsearch.discovery.zen.elect;
 
 import com.carrotsearch.hppc.ObjectContainer;
-import com.google.common.collect.Lists;
 import org.apache.lucene.util.CollectionUtil;
 import org.elasticsearch.Version;
+import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.node.DiscoveryNode;
+import org.elasticsearch.cluster.settings.Validator;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.util.CollectionUtils;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
 
 /**
  *
@@ -36,6 +42,22 @@ import java.util.*;
 public class ElectMasterService extends AbstractComponent {
 
     public static final String DISCOVERY_ZEN_MINIMUM_MASTER_NODES = "discovery.zen.minimum_master_nodes";
+    public static final Validator DISCOVERY_ZEN_MINIMUM_MASTER_NODES_VALIDATOR = new Validator() {
+        @Override
+        public String validate(String setting, String value, ClusterState clusterState) {
+            int intValue;
+            try {
+                intValue = Integer.parseInt(value);
+            } catch (NumberFormatException ex) {
+                return "cannot parse value [" + value + "] as an integer";
+            }
+            int masterNodes = clusterState.nodes().masterNodes().size();
+            if (intValue > masterNodes) {
+                return "cannot set " + ElectMasterService.DISCOVERY_ZEN_MINIMUM_MASTER_NODES + " to more than the current master nodes count [" + masterNodes + "]";
+            }
+            return null;
+        }
+    };
 
     // This is the minimum version a master needs to be on, otherwise it gets ignored
     // This is based on the minimum compatible version of the current version this node is on
@@ -80,7 +102,7 @@ public class ElectMasterService extends AbstractComponent {
      * @return
      */
     public List<DiscoveryNode> sortByMasterLikelihood(Iterable<DiscoveryNode> nodes) {
-        ArrayList<DiscoveryNode> sortedNodes = Lists.newArrayList(nodes);
+        ArrayList<DiscoveryNode> sortedNodes = CollectionUtils.iterableAsArrayList(nodes);
         CollectionUtil.introSort(sortedNodes, nodeComparator);
         return sortedNodes;
     }
@@ -93,7 +115,7 @@ public class ElectMasterService extends AbstractComponent {
         if (sortedNodes == null) {
             return new DiscoveryNode[0];
         }
-        List<DiscoveryNode> nextPossibleMasters = Lists.newArrayListWithCapacity(numberOfPossibleMasters);
+        List<DiscoveryNode> nextPossibleMasters = new ArrayList<>(numberOfPossibleMasters);
         int counter = 0;
         for (DiscoveryNode nextPossibleMaster : sortedNodes) {
             if (++counter >= numberOfPossibleMasters) {
@@ -124,7 +146,7 @@ public class ElectMasterService extends AbstractComponent {
     }
 
     private List<DiscoveryNode> sortedMasterNodes(Iterable<DiscoveryNode> nodes) {
-        List<DiscoveryNode> possibleNodes = Lists.newArrayList(nodes);
+        List<DiscoveryNode> possibleNodes = CollectionUtils.iterableAsArrayList(nodes);
         if (possibleNodes.isEmpty()) {
             return null;
         }

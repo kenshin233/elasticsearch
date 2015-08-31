@@ -29,7 +29,7 @@ import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
-import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.ESTestCase;
 import org.junit.Test;
 
 import java.util.Map;
@@ -43,7 +43,7 @@ import static org.hamcrest.Matchers.nullValue;
 /**
  *
  */
-public class ThreadPoolSerializationTests extends ElasticsearchTestCase {
+public class ThreadPoolSerializationTests extends ESTestCase {
 
     BytesStreamOutput output = new BytesStreamOutput();
 
@@ -98,5 +98,24 @@ public class ThreadPoolSerializationTests extends ElasticsearchTestCase {
         ThreadPool threadPool = new ThreadPool(settings);
         assertThat(threadPool.info("index").getQueueSize(), is(nullValue()));
         terminate(threadPool);
+    }
+
+    @Test
+    public void testThatToXContentWritesInteger() throws Exception {
+        ThreadPool.Info info = new ThreadPool.Info("foo", "search", 1, 10, TimeValue.timeValueMillis(3000), SizeValue.parseSizeValue("1k"));
+        XContentBuilder builder = jsonBuilder();
+        builder.startObject();
+        info.toXContent(builder, ToXContent.EMPTY_PARAMS);
+        builder.endObject();
+
+        BytesReference bytesReference = builder.bytes();
+        Map<String, Object> map;
+        try (XContentParser parser = XContentFactory.xContent(bytesReference).createParser(bytesReference)) {
+            map = parser.map();
+        }
+        assertThat(map, hasKey("foo"));
+        map = (Map<String, Object>) map.get("foo");
+        assertThat(map, hasKey("queue_size"));
+        assertThat(map.get("queue_size").toString(), is("1000"));
     }
 }

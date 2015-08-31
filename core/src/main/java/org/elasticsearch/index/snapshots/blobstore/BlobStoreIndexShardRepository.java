@@ -20,8 +20,6 @@
 package org.elasticsearch.index.snapshots.blobstore;
 
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
-import com.google.common.io.ByteStreams;
 import org.apache.lucene.index.CorruptIndexException;
 import org.apache.lucene.index.IndexFormatTooNewException;
 import org.apache.lucene.index.IndexFormatTooOldException;
@@ -43,7 +41,6 @@ import org.elasticsearch.common.blobstore.BlobContainer;
 import org.elasticsearch.common.blobstore.BlobMetaData;
 import org.elasticsearch.common.blobstore.BlobPath;
 import org.elasticsearch.common.blobstore.BlobStore;
-import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.inject.Inject;
@@ -51,11 +48,14 @@ import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.lucene.store.InputStreamIndexInput;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeValue;
-import org.elasticsearch.common.xcontent.*;
 import org.elasticsearch.index.IndexService;
 import org.elasticsearch.index.deletionpolicy.SnapshotIndexCommit;
 import org.elasticsearch.index.shard.ShardId;
-import org.elasticsearch.index.snapshots.*;
+import org.elasticsearch.index.snapshots.IndexShardRepository;
+import org.elasticsearch.index.snapshots.IndexShardRestoreFailedException;
+import org.elasticsearch.index.snapshots.IndexShardSnapshotException;
+import org.elasticsearch.index.snapshots.IndexShardSnapshotFailedException;
+import org.elasticsearch.index.snapshots.IndexShardSnapshotStatus;
 import org.elasticsearch.index.snapshots.blobstore.BlobStoreIndexShardSnapshot.FileInfo;
 import org.elasticsearch.index.store.Store;
 import org.elasticsearch.index.store.StoreFileMetaData;
@@ -63,15 +63,21 @@ import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.indices.recovery.RecoveryState;
 import org.elasticsearch.repositories.RepositoryName;
 import org.elasticsearch.repositories.RepositoryVerificationException;
-import org.elasticsearch.repositories.blobstore.*;
+import org.elasticsearch.repositories.blobstore.BlobStoreFormat;
+import org.elasticsearch.repositories.blobstore.BlobStoreRepository;
+import org.elasticsearch.repositories.blobstore.ChecksumBlobStoreFormat;
+import org.elasticsearch.repositories.blobstore.LegacyBlobStoreFormat;
 
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-import static com.google.common.collect.Lists.newArrayList;
 import static org.elasticsearch.repositories.blobstore.BlobStoreRepository.testBlobPrefix;
 
 /**
@@ -221,10 +227,10 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
 
     @Override
     public void verify(String seed) {
-        BlobContainer testBlobContainer = blobStore.blobContainer(basePath);
+        BlobContainer testBlobContainer = blobStore.blobContainer(basePath.add(testBlobPrefix(seed)));
         DiscoveryNode localNode = clusterService.localNode();
-        if (testBlobContainer.blobExists(testBlobPrefix(seed) + "-master")) {
-            try (OutputStream outputStream = testBlobContainer.createOutput(testBlobPrefix(seed) + "-" + localNode.getId())) {
+        if (testBlobContainer.blobExists("master.dat")) {
+            try (OutputStream outputStream = testBlobContainer.createOutput("data-" + localNode.getId() + ".dat")) {
                 outputStream.write(Strings.toUTF8Bytes(seed));
             } catch (IOException exp) {
                 throw new RepositoryVerificationException(repositoryName, "store location [" + blobStore + "] is not accessible on the node [" + localNode + "]", exp);
@@ -318,7 +324,7 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
             }
 
             // Build a list of snapshots that should be preserved
-            List<SnapshotFiles> newSnapshotsList = Lists.newArrayList();
+            List<SnapshotFiles> newSnapshotsList = new ArrayList<>();
             for (SnapshotFiles point : snapshots) {
                 if (!point.snapshot().equals(snapshotId.getSnapshot())) {
                     newSnapshotsList.add(point);
@@ -352,32 +358,37 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
          */
         protected void finalize(List<SnapshotFiles> snapshots, int fileListGeneration, Map<String, BlobMetaData> blobs) {
             BlobStoreIndexShardSnapshots newSnapshots = new BlobStoreIndexShardSnapshots(snapshots);
+            List<String> blobsToDelete = new ArrayList<>();
             // delete old index files first
             for (String blobName : blobs.keySet()) {
                 // delete old file lists
                 if (indexShardSnapshotsFormat.isTempBlobName(blobName) || blobName.startsWith(SNAPSHOT_INDEX_PREFIX)) {
-                    try {
-                        blobContainer.deleteBlob(blobName);
-                    } catch (IOException e) {
-                        // We cannot delete index file - this is fatal, we cannot continue, otherwise we might end up
-                        // with references to non-existing files
-                        throw new IndexShardSnapshotFailedException(shardId, "error deleting index file [{}] during cleanup", e);
-                    }
+                    blobsToDelete.add(blobName);
                 }
             }
 
+            try {
+                blobContainer.deleteBlobs(blobsToDelete);
+            } catch (IOException e) {
+                // We cannot delete index file - this is fatal, we cannot continue, otherwise we might end up
+                // with references to non-existing files
+                throw new IndexShardSnapshotFailedException(shardId, "error deleting index files during cleanup, reason: " + e.getMessage(), e);
+            }
+
+            blobsToDelete = new ArrayList<>();
             // now go over all the blobs, and if they don't exists in a snapshot, delete them
             for (String blobName : blobs.keySet()) {
-                // delete old file lists
+                // delete unused files
                 if (blobName.startsWith(DATA_BLOB_PREFIX)) {
                     if (newSnapshots.findNameFile(FileInfo.canonicalName(blobName)) == null) {
-                        try {
-                            blobContainer.deleteBlob(blobName);
-                        } catch (IOException e) {
-                            logger.debug("[{}] [{}] error deleting blob [{}] during cleanup", e, snapshotId, shardId, blobName);
-                        }
+                        blobsToDelete.add(blobName);
                     }
                 }
+            }
+            try {
+                blobContainer.deleteBlobs(blobsToDelete);
+            } catch (IOException e) {
+                logger.debug("[{}] [{}] error deleting some of the blobs [{}] during cleanup", e, snapshotId, shardId, blobsToDelete);
             }
 
             // If we deleted all snapshots - we don't need to create the index file
@@ -454,7 +465,7 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
             }
 
             // We couldn't load the index file - falling back to loading individual snapshots
-            List<SnapshotFiles> snapshots = Lists.newArrayList();
+            List<SnapshotFiles> snapshots = new ArrayList<>();
             for (String name : blobs.keySet()) {
                 try {
                     BlobStoreIndexShardSnapshot snapshot = null;
@@ -519,11 +530,11 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
                 BlobStoreIndexShardSnapshots snapshots = tuple.v1();
                 int fileListGeneration = tuple.v2();
 
-                final List<BlobStoreIndexShardSnapshot.FileInfo> indexCommitPointFiles = newArrayList();
+                final List<BlobStoreIndexShardSnapshot.FileInfo> indexCommitPointFiles = new ArrayList<>();
 
                 int indexNumberOfFiles = 0;
                 long indexTotalFilesSize = 0;
-                ArrayList<FileInfo> filesToSnapshot = newArrayList();
+                ArrayList<FileInfo> filesToSnapshot = new ArrayList<>();
                 final Store.MetadataSnapshot metadata;
                 // TODO apparently we don't use the MetadataSnapshot#.recoveryDiff(...) here but we should
                 try {
@@ -606,7 +617,7 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
 
                 // delete all files that are not referenced by any commit point
                 // build a new BlobStoreIndexShardSnapshot, that includes this one and all the saved ones
-                List<SnapshotFiles> newSnapshotsList = Lists.newArrayList();
+                List<SnapshotFiles> newSnapshotsList = new ArrayList<>();
                 newSnapshotsList.add(new SnapshotFiles(snapshot.snapshot(), snapshot.indexFiles()));
                 for (SnapshotFiles point : snapshots) {
                     newSnapshotsList.add(point);
@@ -802,7 +813,7 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
                     throw new IndexShardRestoreFailedException(shardId, "Can't restore corrupted shard", e);
                 }
 
-                final List<FileInfo> filesToRecover = Lists.newArrayList();
+                final List<FileInfo> filesToRecover = new ArrayList<>();
                 final Map<String, StoreFileMetaData> snapshotMetaData = new HashMap<>();
                 final Map<String, FileInfo> fileInfos = new HashMap<>();
                 for (final FileInfo fileInfo : snapshot.indexFiles()) {

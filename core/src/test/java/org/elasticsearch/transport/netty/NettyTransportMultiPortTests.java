@@ -20,18 +20,18 @@ package org.elasticsearch.transport.netty;
 
 import com.carrotsearch.hppc.IntHashSet;
 import com.google.common.base.Charsets;
-
 import org.elasticsearch.Version;
 import org.elasticsearch.cache.recycler.PageCacheRecycler;
 import org.elasticsearch.common.component.Lifecycle;
+import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.network.NetworkService;
 import org.elasticsearch.common.network.NetworkUtils;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.indices.breaker.NoneCircuitBreakerService;
-import org.elasticsearch.test.ElasticsearchTestCase;
-import org.elasticsearch.test.cache.recycler.MockBigArrays;
+import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.common.util.MockBigArrays;
 import org.elasticsearch.test.junit.rule.RepeatOnExceptionRule;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.BindTransportException;
@@ -49,7 +49,7 @@ import java.net.Socket;
 import static org.elasticsearch.common.settings.Settings.settingsBuilder;
 import static org.hamcrest.Matchers.is;
 
-public class NettyTransportMultiPortTests extends ElasticsearchTestCase {
+public class NettyTransportMultiPortTests extends ESTestCase {
 
     private static final int MAX_RETRIES = 10;
 
@@ -136,29 +136,6 @@ public class NettyTransportMultiPortTests extends ElasticsearchTestCase {
     }
 
     @Test
-    public void testThatBindingOnDifferentHostsWorks() throws Exception {
-        int[] ports = getRandomPorts(2);
-        InetAddress firstNonLoopbackAddress = NetworkUtils.getFirstNonLoopbackAddress(NetworkUtils.StackType.IPv4);
-        assumeTrue("No IP-v4 non-loopback address available - are you on a plane?", firstNonLoopbackAddress != null);
-        Settings settings = settingsBuilder()
-                .put("network.host", "127.0.0.1")
-                .put("transport.tcp.port", ports[0])
-                .put("transport.profiles.default.bind_host", "127.0.0.1")
-                .put("transport.profiles.client1.bind_host", firstNonLoopbackAddress.getHostAddress())
-                .put("transport.profiles.client1.port", ports[1])
-                .build();
-
-        ThreadPool threadPool = new ThreadPool("tst");
-        try (NettyTransport ignored = startNettyTransport(settings, threadPool)) {
-            assertPortIsBound("127.0.0.1", ports[0]);
-            assertPortIsBound(firstNonLoopbackAddress.getHostAddress(), ports[1]);
-            assertConnectionRefused(ports[1]);
-        } finally {
-            terminate(threadPool);
-        }
-    }
-
-    @Test
     public void testThatProfileWithoutValidNameIsIgnored() throws Exception {
         int[] ports = getRandomPorts(3);
 
@@ -193,7 +170,7 @@ public class NettyTransportMultiPortTests extends ElasticsearchTestCase {
                         // Set SO_REUSEADDR as we may bind here and not be able
                         // to reuse the address immediately without it.
                         serverSocket.setReuseAddress(NetworkUtils.defaultReuseAddress());
-                        serverSocket.bind(new InetSocketAddress(nextPort));
+                        serverSocket.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), nextPort));
 
                         // bind was a success
                         logger.debug("port [{}] available.", nextPort);
@@ -213,7 +190,7 @@ public class NettyTransportMultiPortTests extends ElasticsearchTestCase {
     private NettyTransport startNettyTransport(Settings settings, ThreadPool threadPool) {
         BigArrays bigArrays = new MockBigArrays(new PageCacheRecycler(settings, threadPool), new NoneCircuitBreakerService());
 
-        NettyTransport nettyTransport = new NettyTransport(settings, threadPool, new NetworkService(settings), bigArrays, Version.CURRENT);
+        NettyTransport nettyTransport = new NettyTransport(settings, threadPool, new NetworkService(settings), bigArrays, Version.CURRENT, new NamedWriteableRegistry());
         nettyTransport.start();
 
         assertThat(nettyTransport.lifecycleState(), is(Lifecycle.State.STARTED));
@@ -222,7 +199,7 @@ public class NettyTransportMultiPortTests extends ElasticsearchTestCase {
 
     private void assertConnectionRefused(int port) throws Exception {
         try {
-            trySocketConnection(new InetSocketTransportAddress("localhost", port).address());
+            trySocketConnection(new InetSocketTransportAddress(InetAddress.getByName("localhost"), port).address());
             fail("Expected to get exception when connecting to port " + port);
         } catch (IOException e) {
             // expected
@@ -236,7 +213,7 @@ public class NettyTransportMultiPortTests extends ElasticsearchTestCase {
 
     private void assertPortIsBound(String host, int port) throws Exception {
         logger.info("Trying to connect to [{}]:[{}]", host, port);
-        trySocketConnection(new InetSocketTransportAddress(host, port).address());
+        trySocketConnection(new InetSocketTransportAddress(InetAddress.getByName(host), port).address());
     }
 
     private void trySocketConnection(InetSocketAddress address) throws Exception {

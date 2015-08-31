@@ -19,13 +19,12 @@
 
 package org.elasticsearch.index.query;
 
-import com.google.common.collect.Lists;
-
 import org.elasticsearch.common.geo.GeoHashUtils;
 import org.elasticsearch.common.geo.GeoPoint;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 public class GeoPolygonQueryBuilder extends QueryBuilder {
@@ -34,9 +33,13 @@ public class GeoPolygonQueryBuilder extends QueryBuilder {
     
     private final String name;
 
-    private final List<GeoPoint> shell = Lists.newArrayList();
+    private final List<GeoPoint> shell = new ArrayList<>();
 
     private String queryName;
+
+    private Boolean coerce;
+
+    private Boolean ignoreMalformed;
 
     public GeoPolygonQueryBuilder(String name) {
         this.name = name;
@@ -70,6 +73,16 @@ public class GeoPolygonQueryBuilder extends QueryBuilder {
         return this;
     }
 
+    public GeoPolygonQueryBuilder coerce(boolean coerce) {
+        this.coerce = coerce;
+        return this;
+    }
+
+    public GeoPolygonQueryBuilder ignoreMalformed(boolean ignoreMalformed) {
+        this.ignoreMalformed = ignoreMalformed;
+        return this;
+    }
+
     @Override
     protected void doXContent(XContentBuilder builder, Params params) throws IOException {
         builder.startObject(GeoPolygonQueryParser.NAME);
@@ -84,6 +97,12 @@ public class GeoPolygonQueryBuilder extends QueryBuilder {
 
         if (queryName != null) {
             builder.field("_name", queryName);
+        }
+        if (coerce != null) {
+            builder.field("coerce", coerce);
+        }
+        if (ignoreMalformed != null) {
+            builder.field("ignore_malformed", ignoreMalformed);
         }
 
         builder.endObject();

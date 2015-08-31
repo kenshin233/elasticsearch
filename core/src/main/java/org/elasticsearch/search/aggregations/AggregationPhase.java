@@ -19,7 +19,6 @@
 package org.elasticsearch.search.aggregations;
 
 import com.google.common.collect.ImmutableMap;
-
 import org.apache.lucene.search.BooleanClause.Occur;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.Query;
@@ -86,7 +85,7 @@ public class AggregationPhase implements SearchPhase {
                 if (!collectors.isEmpty()) {
                     final BucketCollector collector = BucketCollector.wrap(collectors);
                     collector.preCollection();
-                    context.searcher().queryCollectors().put(AggregationPhase.class, collector);
+                    context.queryCollectors().put(AggregationPhase.class, collector);
                 }
             } catch (IOException e) {
                 throw new AggregationInitializationException("Could not initialize aggregators", e);
@@ -130,6 +129,8 @@ public class AggregationPhase implements SearchPhase {
                 context.searcher().search(query, globalsCollector);
             } catch (Exception e) {
                 throw new QueryPhaseExecutionException(context, "Failed to execute global aggregators", e);
+            } finally {
+                context.clearReleasables(SearchContext.Lifetime.COLLECTION);
             }
         }
 
@@ -162,7 +163,7 @@ public class AggregationPhase implements SearchPhase {
 
         // disable aggregations so that they don't run on next pages in case of scrolling
         context.aggregations(null);
-        context.searcher().queryCollectors().remove(AggregationPhase.class);
+        context.queryCollectors().remove(AggregationPhase.class);
     }
 
 }

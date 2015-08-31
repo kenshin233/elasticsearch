@@ -32,7 +32,7 @@
                     "stopwords":["stop2-1", "stop2-2"]
                 },
                 "my":{
-                    "type":"org.elasticsearch.index.analysis.filter1.MyFilterTokenFilterFactory"
+                    "type":"myfilter"
                 },
                 "dict_dec":{
                     "type":"dictionary_decompounder",
@@ -68,7 +68,7 @@
                 },
                 "custom6":{
                     "tokenizer":"standard",
-                    "position_offset_gap": 256
+                    "position_increment_gap": 256
                 },
                 "czechAnalyzerWithStemmer":{
                     "tokenizer":"standard",
